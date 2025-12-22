@@ -49,7 +49,8 @@
       Plus, Trash2, Coffee, Download, Users, List, Settings, 
       ShoppingBag, X, ChefHat, Check, Upload, Image as ImageIcon, 
       Loader2, Sparkles, Edit, Save, AlertTriangle, PenLine, Wifi, WifiOff, Lock, LogOut,
-      Minus, Info, ExternalLink, Search, Square, CheckSquare, Eye, EyeOff, RotateCcw
+      Minus, Info, ExternalLink, Search, Square, CheckSquare, Eye, EyeOff, RotateCcw,
+      ArrowRightLeft, FileSearch, CheckCircle2, AlertCircle
     } from 'lucide-react';
     
     import { initializeApp } from 'firebase/app';
@@ -59,7 +60,8 @@
     // ==========================================
     //  設定區域 (LINE / Firebase / Gemini)
     // ==========================================
-    const LIFF_ID = "2008729022-PSf5NFFI";
+    // 更新後的 LIFF ID
+    const LIFF_ID = "2008746387-2t2kxxUX";
     
     const firebaseConfig = {
       apiKey: "AIzaSyBJeC5O1DF2VpvoSE8OKjtPT4wYPYec-Ok",
@@ -71,7 +73,8 @@
       measurementId: "G-R5SV13TYTE"
     };
 
-    const apiKey = "AIzaSyD5OEzxxcXXmfFcfztG_8m3hplueflNxi0"; 
+    // 更新後的 API Key
+    const apiKey = "AIzaSyA5NZj3l0DxdwlB_-J2F-qQ6TvnVittY34"; 
     const appId = 'my-office-tea-v1';
 
     const DEFAULT_SUGAR = ['正常糖', '少糖', '半糖', '微糖', '無糖', '無'];
@@ -129,6 +132,11 @@
       const [customItemPrice, setCustomItemPrice] = useState('');
       const [selectedToppings, setSelectedToppings] = useState([]);
       const [editingOrderId, setEditingOrderId] = useState(null);
+
+      // --- 菜單查核相關 State ---
+      const [auditText, setAuditText] = useState('');
+      const [isAuditing, setIsAuditing] = useState(false);
+      const [auditResult, setAuditResult] = useState(null); // { added: [], removed: [] }
 
       const showToast = (msg, type = 'success') => setToast({ message: msg, type });
 
@@ -207,23 +215,16 @@
         }
       }, [cartItem, selectedStoreId, stores, editingOrderId]);
 
-      const callGeminiAI = async (prompt, imageParts = []) => {
+      const callGeminiAI = async (prompt, imageParts = [], systemInstruction = "") => {
         const maxRetries = 5;
         const delays = [1000, 2000, 4000, 8000, 16000];
-        const systemPrompt = `你是一個專業的菜單整理助理。規則：
-        1. 嚴禁翻譯名稱，保留原始繁體中文。
-        2. 精確提取價格。
-        3. 標註規格(M)/(L)。
-        4. 若品項名稱包含斜線（如 經典紅茶/綠茶），必須拆分為多個獨立品項（如 經典紅茶、經典綠茶）。
-        5. 搜尋糖冰選項(包含一分糖等細項)。
-        6. 提取加料，多項共用價格須拆分。
-        7. 回傳純 JSON 包含 items, toppings, sugarOptions, iceOptions。`;
+        const defaultSystemPrompt = `你是一個專業的菜單助理。規則：回傳純 JSON 格式。`;
         
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
           try {
             const payload = { 
               contents: [{ parts: [{ text: prompt }, ...imageParts] }],
-              systemInstruction: { parts: [{ text: systemPrompt }] },
+              systemInstruction: { parts: [{ text: systemInstruction || defaultSystemPrompt }] },
               generationConfig: { responseMimeType: "application/json" }
             };
             const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
@@ -257,7 +258,13 @@
             })));
           }
           const query = mode === 'image' ? "分析菜單圖片" : `分析內容：\n${menuInputText}`;
-          const result = await callGeminiAI(query, imageParts);
+          const systemPrompt = `你是一個專業的菜單整理助理。規則：
+          1. 嚴禁翻譯名稱，保留原始繁體中文。
+          2. 精確提取價格。
+          3. 若品項名稱包含斜線，拆分為多個獨立品項。
+          4. 回傳純 JSON 包含 items, toppings, sugarOptions, iceOptions。`;
+          
+          const result = await callGeminiAI(query, imageParts, systemPrompt);
           const tempStore = {
             name: newStoreName, description: newStoreDescription, url: newStoreUrl,
             items: (result.items || []).map((it, i) => ({ id: `ai-${Date.now()}-${i}`, name: it.name || "未命名", price: parsePrice(it.price), noSugar: false, noIce: false, allowNote: true })),
@@ -276,6 +283,52 @@
         } catch (e) { showToast(`失敗: ${e.message}`, 'error'); } finally { setIsAnalyzing(false); }
       };
 
+      // --- 菜單比對查核功能 ---
+      const handleMenuAudit = async () => {
+        if (!auditText.trim()) return showToast('請貼上網頁文字內容', 'error');
+        setIsAuditing(true);
+        showToast('正在與現有菜單進行比對...', 'info');
+        try {
+          const currentItems = editingStore.items.map(i => ({ name: i.name, price: i.price }));
+          const systemPrompt = `你是一個資深店鋪查核員。
+          任務：比對【系統現有菜單】與【從網頁抓取的新文字】，找出差異。
+          規則：
+          1. 找出「網頁文字」中有，但「系統現有菜單」中沒有的品項（新增品項）。
+          2. 找出「系統現有菜單」中有，但「網頁文字」中明顯已消失或找不到的品項（已移除品項）。
+          3. 如果只是價格微調，請放入 added 區塊並註明新價格。
+          回傳純 JSON: { added: [{name, price}], removed: [{name}] }`;
+
+          const userQuery = `
+          系統現有菜單：${JSON.stringify(currentItems)}
+          網頁抓取文字內容：
+          ${auditText}`;
+
+          const result = await callGeminiAI(userQuery, [], systemPrompt);
+          setAuditResult(result);
+          showToast('查核完成，請確認差異');
+        } catch (e) {
+          showToast('比對失敗', 'error');
+        } finally {
+          setIsAuditing(false);
+        }
+      };
+
+      const applyAuditItem = (item, type) => {
+        if (type === 'add') {
+          setEditingStore(p => ({
+            ...p,
+            items: [...p.items, { id: `audit-${Date.now()}`, name: item.name, price: Number(item.price), noSugar: false, noIce: false, allowNote: true }]
+          }));
+          setAuditResult(p => ({ ...p, added: p.added.filter(x => x.name !== item.name) }));
+        } else if (type === 'remove') {
+          setEditingStore(p => ({
+            ...p,
+            items: p.items.filter(x => x.name !== item.name)
+          }));
+          setAuditResult(p => ({ ...p, removed: p.removed.filter(x => x.name !== item.name) }));
+        }
+      };
+
       const saveStoreChanges = async () => {
         if (!user || !db) return showToast('尚未連線', 'error');
         if (!editingStore.name.trim()) return showToast('名稱不能為空', 'error');
@@ -292,7 +345,10 @@
           } else {
             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'stores', editingStore.id), storeData);
           }
-          setEditingStore(null); showToast('儲存成功');
+          setEditingStore(null); 
+          setAuditResult(null);
+          setAuditText('');
+          showToast('儲存成功');
         } catch (e) { showToast('儲存失敗', 'error'); }
       };
 
@@ -330,6 +386,8 @@
         editState.sugarStr = (editState.sugarOptions || DEFAULT_SUGAR).join(',');
         editState.iceStr = (editState.iceOptions || DEFAULT_ICE).join(',');
         setEditingStore(editState);
+        setAuditResult(null);
+        setAuditText('');
       };
 
       const handleAddToCart = async () => {
@@ -678,8 +736,12 @@
           {editingStore && (
             <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
               <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-                <div className="p-4 bg-gray-100 border-b flex justify-between items-center font-bold text-gray-700"><h3>編輯店家與菜單資料</h3><button onClick={()=>setEditingStore(null)}><X size={24}/></button></div>
+                <div className="p-4 bg-gray-100 border-b flex justify-between items-center font-bold text-gray-700">
+                  <h3>編輯店家與菜單資料</h3>
+                  <button onClick={()=>setEditingStore(null)}><X size={24}/></button>
+                </div>
                 <div className="p-6 overflow-y-auto flex-1 space-y-6">
+                  {/* 基本資訊區 */}
                   <section className="space-y-4">
                     <h4 className="font-bold text-teal-700 border-l-4 border-teal-600 pl-2 text-sm uppercase">基本資訊</h4>
                     <input type="text" value={editingStore.name} onChange={e=>setEditingStore({...editingStore, name: e.target.value})} className="w-full p-2 border rounded font-bold outline-none focus:ring-2 focus:ring-teal-500" placeholder="店家名" />
@@ -687,48 +749,107 @@
                       <input type="text" value={editingStore.description || ''} onChange={e=>setEditingStore({...editingStore, description: e.target.value})} className="p-2 border rounded text-sm" placeholder="介紹 (如：公休日)" />
                       <input type="text" value={editingStore.url || ''} onChange={e=>setEditingStore({...editingStore, url: e.target.value})} className="p-2 border rounded text-sm" placeholder="網址 (如：FB粉專)" />
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 uppercase">糖度 (逗號分隔)</label><input type="text" value={editingStore.sugarStr || ''} onChange={e=>setEditingStore({...editingStore, sugarStr: e.target.value})} className="w-full p-2 border rounded text-sm" /></div>
-                      <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 uppercase">冰塊 (逗號分隔)</label><input type="text" value={editingStore.iceStr || ''} onChange={e=>setEditingStore({...editingStore, iceStr: e.target.value})} className="w-full p-2 border rounded text-sm" /></div>
+                  </section>
+
+                  {/* AI 菜單查核驗證區 */}
+                  <section className="bg-purple-50 p-4 rounded-xl border border-purple-100 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-bold text-purple-700 flex items-center gap-2 text-sm uppercase"><FileSearch size={18}/> AI 菜單查核驗證</h4>
+                      <div className="text-[10px] text-purple-400 font-medium">利用網頁最新文字進行查核</div>
                     </div>
+                    <div className="flex gap-2">
+                      <textarea 
+                        value={auditText} 
+                        onChange={e=>setAuditText(e.target.value)} 
+                        placeholder="請貼上該店點單網頁的品項文字內容，用來查核是否有新增或刪減的品項..." 
+                        className="flex-1 p-2 border rounded text-xs min-h-[80px] focus:ring-2 focus:ring-purple-500 outline-none"
+                      />
+                      <button 
+                        onClick={handleMenuAudit} 
+                        disabled={isAuditing} 
+                        className="bg-purple-600 text-white px-4 rounded-lg font-bold text-sm flex flex-col items-center justify-center gap-1 hover:bg-purple-700 disabled:bg-gray-300 min-w-[80px] shadow-sm"
+                      >
+                        {isAuditing ? <Loader2 className="animate-spin" size={20}/> : <ArrowRightLeft size={20}/>}
+                        <span className="text-[10px]">{isAuditing ? '比對中' : '開始比對'}</span>
+                      </button>
+                    </div>
+
+                    {auditResult && (
+                      <div className="space-y-3 animate-fade-in">
+                        {/* 新增品項查核結果 */}
+                        {auditResult.added?.length > 0 && (
+                          <div className="bg-white p-3 rounded-lg border border-green-200">
+                            <h5 className="text-[10px] font-bold text-green-600 mb-2 flex items-center gap-1"><CheckCircle2 size={12}/> 發現網頁中有新增加的品項 ({auditResult.added.length})</h5>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {auditResult.added.map((item, idx) => (
+                                <div key={idx} className="flex justify-between items-center bg-green-50/50 p-2 rounded text-xs border border-green-100">
+                                  <span>{item.name} (${item.price})</span>
+                                  <button onClick={()=>applyAuditItem(item, 'add')} className="text-green-600 hover:bg-green-100 p-1 rounded-full transition-colors"><Plus size={14}/></button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {/* 消失品項查核結果 */}
+                        {auditResult.removed?.length > 0 && (
+                          <div className="bg-white p-3 rounded-lg border border-red-200">
+                            <h5 className="text-[10px] font-bold text-red-600 mb-2 flex items-center gap-1"><AlertCircle size={12}/> 原菜單中有，但網頁文字中找不到的品項 ({auditResult.removed.length})</h5>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {auditResult.removed.map((item, idx) => (
+                                <div key={idx} className="flex justify-between items-center bg-red-50/50 p-2 rounded text-xs border border-red-100 line-through text-gray-400">
+                                  <span>{item.name}</span>
+                                  <button onClick={()=>applyAuditItem(item, 'remove')} className="text-red-600 hover:bg-red-100 p-1 rounded-full transition-colors"><Trash2 size={14}/></button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {auditResult.added?.length === 0 && auditResult.removed?.length === 0 && (
+                          <div className="bg-white p-3 rounded-lg border border-gray-200 text-center text-xs text-gray-500 font-bold">
+                            ✨ 查核完成！現有菜單與網頁文字內容完全一致。
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </section>
                   
+                  {/* 選項設定區 (糖、冰) */}
+                  <section className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 uppercase">糖度選項 (逗號分隔)</label><input type="text" value={editingStore.sugarStr || ''} onChange={e=>setEditingStore({...editingStore, sugarStr: e.target.value})} className="w-full p-2 border rounded text-sm" /></div>
+                    <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 uppercase">冰塊選項 (逗號分隔)</label><input type="text" value={editingStore.iceStr || ''} onChange={e=>setEditingStore({...editingStore, iceStr: e.target.value})} className="w-full p-2 border rounded text-sm" /></div>
+                  </section>
+                  
+                  {/* 品項管理區 */}
                   <section className="border-t pt-4">
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 bg-gray-50 p-3 rounded-lg border">
-                      <div className="font-bold text-teal-700 text-sm">品項細節開關</div>
+                      <div className="font-bold text-teal-700 text-sm">品項細節快速設定</div>
                       <div className="flex flex-wrap gap-2">
                         <div className="flex gap-1 items-center bg-white p-1 rounded border shadow-sm">
                           <span className="text-[10px] text-gray-400 px-1 border-r mr-1">糖度</span>
-                          <button onClick={()=>batchToggleItems('noSugar', false)} className="text-[10px] bg-orange-50 text-orange-600 px-2 py-1 rounded hover:bg-orange-100">全開</button>
-                          <button onClick={()=>batchToggleItems('noSugar', true)} className="text-[10px] bg-gray-100 text-gray-400 px-2 py-1 rounded hover:bg-gray-200">全關</button>
+                          <button onClick={()=>batchToggleItems('noSugar', false)} className="text-[10px] bg-orange-50 text-orange-600 px-2 py-1 rounded">全開</button>
+                          <button onClick={()=>batchToggleItems('noSugar', true)} className="text-[10px] bg-gray-100 text-gray-400 px-2 py-1 rounded">全關</button>
                         </div>
                         <div className="flex gap-1 items-center bg-white p-1 rounded border shadow-sm">
                           <span className="text-[10px] text-gray-400 px-1 border-r mr-1">冰塊</span>
-                          <button onClick={()=>batchToggleItems('noIce', false)} className="text-[10px] bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100">全開</button>
-                          <button onClick={()=>batchToggleItems('noIce', true)} className="text-[10px] bg-gray-100 text-gray-400 px-2 py-1 rounded hover:bg-gray-200">全關</button>
-                        </div>
-                        <div className="flex gap-1 items-center bg-white p-1 rounded border shadow-sm">
-                          <span className="text-[10px] text-gray-400 px-1 border-r mr-1">備註</span>
-                          <button onClick={()=>batchToggleItems('allowNote', true)} className="text-[10px] bg-green-50 text-green-600 px-2 py-1 rounded hover:bg-green-100">全開</button>
-                          <button onClick={()=>batchToggleItems('allowNote', false)} className="text-[10px] bg-gray-100 text-gray-400 px-2 py-1 rounded hover:bg-gray-200">全關</button>
+                          <button onClick={()=>batchToggleItems('noIce', false)} className="text-[10px] bg-blue-50 text-blue-600 px-2 py-1 rounded">全開</button>
+                          <button onClick={()=>batchToggleItems('noIce', true)} className="text-[10px] bg-gray-100 text-gray-400 px-2 py-1 rounded">全關</button>
                         </div>
                       </div>
                     </div>
                     
                     <div className="flex justify-between items-center mb-2">
-                      <h5 className="font-bold text-xs text-gray-500 uppercase">品項清單</h5>
-                      <button onClick={addEmptyItemToEditing} className="text-xs bg-teal-50 text-teal-600 px-2 py-1 rounded border border-teal-100 hover:bg-teal-100 font-bold">+ 品項</button>
+                      <h5 className="font-bold text-xs text-gray-500 uppercase">品項清單 ({editingStore.items?.length || 0})</h5>
+                      <button onClick={addEmptyItemToEditing} className="text-xs bg-teal-50 text-teal-600 px-2 py-1 rounded border border-teal-100 hover:bg-teal-100 font-bold">+ 手動新增品項</button>
                     </div>
 
                     <div className="space-y-2">
                       {(editingStore.items || []).map(item => (
-                        <div key={item.id} className="flex flex-wrap gap-2 items-center bg-white p-2 rounded-lg border shadow-sm">
+                        <div key={item.id} className="flex flex-wrap gap-2 items-center bg-white p-2 rounded-lg border shadow-sm animate-fade-in">
                           <input type="text" value={item.name} onChange={e=>updateEditingItem(item.id, 'name', e.target.value)} className="flex-1 min-w-[120px] p-1 border rounded text-sm focus:ring-1 focus:ring-teal-500 outline-none" placeholder="品項名稱" />
                           <div className="w-16 relative"><span className="absolute left-1 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">$</span><input type="number" value={item.price} onChange={e=>updateEditingItem(item.id, 'price', e.target.value)} className="w-full p-1 pl-3 border rounded text-xs text-right" /></div>
                           <div className="flex gap-1 items-center border-l pl-2 border-gray-100">
-                            <button onClick={()=>updateEditingItem(item.id, 'noSugar', !item.noSugar)} className={`w-7 h-7 flex items-center justify-center rounded text-xs font-bold border transition-all ${!item.noSugar ? 'bg-orange-50 text-orange-600 border-orange-200' : 'bg-gray-50 text-gray-300 border-gray-100'}`}>甜</button>
-                            <button onClick={()=>updateEditingItem(item.id, 'noIce', !item.noIce)} className={`w-7 h-7 flex items-center justify-center rounded text-xs font-bold border transition-all ${!item.noIce ? 'bg-blue-50 text-blue-600 border-blue-200' : 'bg-gray-50 text-gray-300 border-gray-100'}`}>冰</button>
-                            <button onClick={()=>updateEditingItem(item.id, 'allowNote', !item.allowNote)} className={`w-7 h-7 flex items-center justify-center rounded text-xs font-bold border transition-all ${item.allowNote !== false ? 'bg-green-50 text-green-600 border-green-200' : 'bg-gray-50 text-gray-300 border-gray-100'}`}>註</button>
+                            <button onClick={()=>updateEditingItem(item.id, 'noSugar', !item.noSugar)} className={`w-7 h-7 flex items-center justify-center rounded text-xs font-bold border ${!item.noSugar ? 'bg-orange-50 text-orange-600 border-orange-200' : 'bg-gray-50 text-gray-300 border-gray-100'}`}>甜</button>
+                            <button onClick={()=>updateEditingItem(item.id, 'noIce', !item.noIce)} className={`w-7 h-7 flex items-center justify-center rounded text-xs font-bold border ${!item.noIce ? 'bg-blue-50 text-blue-600 border-blue-200' : 'bg-gray-50 text-gray-300 border-gray-100'}`}>冰</button>
                           </div>
                           <button onClick={()=>removeItemFromEditing(item.id)} className="text-gray-300 hover:text-red-500 p-1"><Trash2 size={16}/></button>
                         </div>
@@ -736,22 +857,23 @@
                     </div>
                   </section>
 
+                  {/* 加料區 */}
                   <section className="border-t pt-4 space-y-2">
-                    <div className="flex justify-between items-center mb-2 font-bold text-orange-700 border-l-4 border-orange-600 pl-2 text-sm uppercase"><span>加料清單</span><button onClick={addToppingToEditing} className="text-xs bg-orange-50 text-orange-600 px-2 py-1 rounded border border-orange-100 hover:bg-orange-100 font-bold">+ 加料</button></div>
+                    <div className="flex justify-between items-center mb-2 font-bold text-orange-700 border-l-4 border-orange-600 pl-2 text-sm uppercase"><span>加料設定</span><button onClick={addToppingToEditing} className="text-xs bg-orange-50 text-orange-600 px-2 py-1 rounded border border-orange-100 font-bold">+ 新增加料</button></div>
                     <div className="space-y-2">
                       {(editingStore.toppings || []).map(t => (
                         <div key={t.id} className="flex gap-2 items-center bg-orange-50/20 p-2 rounded border border-orange-100 shadow-sm">
                           <input type="text" value={t.name} onChange={e=>updateEditingTopping(t.id, 'name', e.target.value)} className="flex-1 p-1 border rounded text-sm" placeholder="配料名稱" />
                           <div className="w-20 relative"><span className="absolute left-1 top-1/2 -translate-y-1/2 text-orange-400 text-xs">$</span><input type="number" value={t.price} onChange={e=>updateEditingTopping(t.id, 'price', e.target.value)} className="w-full p-1 pl-4 border rounded text-sm text-right" /></div>
-                          <button onClick={()=>removeToppingFromEditing(t.id)} className="text-gray-300 hover:text-red-500 transition-colors p-1"><Trash2 size={16}/></button>
+                          <button onClick={()=>removeToppingFromEditing(t.id)} className="text-gray-300 hover:text-red-500 p-1"><Trash2 size={16}/></button>
                         </div>
                       ))}
                     </div>
                   </section>
                 </div>
                 <div className="p-4 border-t bg-gray-100 flex justify-end gap-3 shadow-inner">
-                  <button onClick={()=>setEditingStore(null)} className="px-4 py-2 text-gray-500 font-bold hover:bg-gray-200 rounded-lg transition-colors">取消</button>
-                  <button onClick={saveStoreChanges} className="bg-teal-600 text-white px-8 py-2 rounded-lg font-bold shadow-lg shadow-teal-100 hover:bg-teal-700 flex items-center gap-2 active:scale-95 transition-all"><Save size={18}/> 儲存資料</button>
+                  <button onClick={()=>setEditingStore(null)} className="px-4 py-2 text-gray-500 font-bold hover:bg-gray-200 rounded-lg">取消</button>
+                  <button onClick={saveStoreChanges} className="bg-teal-600 text-white px-8 py-2 rounded-lg font-bold shadow-lg shadow-teal-100 hover:bg-teal-700 flex items-center gap-2 transition-all"><Save size={18}/> 儲存並更新店家資料</button>
                 </div>
               </div>
             </div>
