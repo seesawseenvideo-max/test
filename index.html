@@ -238,7 +238,12 @@
         }
       };
 
-      const parsePrice = (v) => typeof v === 'number' ? v : (parseFloat(String(v).match(/[0-9.]+/)) || 0);
+      // 優化價格轉換輔助函數
+      const parsePrice = (v) => {
+        if (typeof v === 'number') return v;
+        const matches = String(v).match(/[0-9.]+/);
+        return matches ? parseFloat(matches[0]) : 0;
+      };
 
       const handleAIParse = async (mode, files = null) => {
         if (!newStoreName.trim()) return showToast('請輸入店家名稱', 'error');
@@ -254,14 +259,14 @@
               r.readAsDataURL(f);
             })));
           }
-          const query = mode === 'image' ? "分析菜單圖片" : `分析內容：\n${menuInputText}`;
+          const queryText = mode === 'image' ? "分析菜單圖片中的品項與對應價格" : `分析內容：\n${menuInputText}`;
           const systemPrompt = `你是一個專業的菜單整理助理。規則：
           1. 嚴禁翻譯名稱，保留原始繁體中文。
-          2. 精確提取價格。
+          2. 精確提取價格，且價格必須以純數字格式存於 price 欄位。
           3. 若品項名稱包含斜線，拆分為多個獨立品項。
           4. 回傳純 JSON 包含 items, toppings, sugarOptions, iceOptions。`;
           
-          const result = await callGeminiAI(query, imageParts, systemPrompt);
+          const result = await callGeminiAI(queryText, imageParts, systemPrompt);
           const tempStore = {
             name: newStoreName, description: newStoreDescription, url: newStoreUrl,
             items: (result.items || []).map((it, i) => ({ id: `ai-${Date.now()}-${i}`, name: it.name || "未命名", price: parsePrice(it.price), noSugar: false, noIce: false, allowNote: true })),
@@ -274,6 +279,11 @@
           editState.id = 'temp-new';
           editState.sugarStr = editState.sugarOptions.join(',');
           editState.iceStr = editState.iceOptions.join(',');
+          
+          // 確保開啟視窗時查核欄位是空的
+          setAuditText('');
+          setAuditResult(null);
+          
           setEditingStore(editState);
           setNewStoreName(''); setNewStoreDescription(''); setNewStoreUrl(''); setMenuInputText('');
           showToast('辨識完成');
@@ -287,7 +297,6 @@
         try {
           const currentItems = editingStore.items.map(i => ({ name: i.name, price: i.price }));
           
-          // 更新提示詞：強調只查核中文字品項名稱
           const systemPrompt = `你是一個資深店鋪查核員。
           任務：比對【系統現有菜單】與【網頁最新文字內容】，找出差異。
           
