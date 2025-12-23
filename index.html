@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>辦公室下午茶點單系統 - AI 穩定版</title>
+  <title>辦公室下午茶點單系統 - AI 2025 穩定版</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
@@ -19,30 +19,25 @@
       }
     }
   </script>
-  <style>
-    body { background-color: #f9fafb; font-family: sans-serif; }
-    .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-  </style>
 </head>
-<body>
+<body class="bg-gray-50">
   <div id="root"></div>
 
   <script type="text/babel" data-type="module">
     import React, { useState, useEffect, useMemo, useRef } from 'react';
     import { createRoot } from 'react-dom/client';
-    import { Plus, Trash2, Coffee, Download, Users, List, Settings, ShoppingBag, X, ChefHat, Check, Image as ImageIcon, Loader2, Sparkles, Edit, Save, AlertTriangle, PenLine, Lock, LogOut, Minus, Info, Search, RotateCcw, ArrowRightLeft, FileSearch } from 'lucide-react';
+    import { Plus, Trash2, Coffee, Settings, ShoppingBag, X, ChefHat, Loader2, Sparkles, Edit, Lock, LogOut, Minus, Search, RotateCcw } from 'lucide-react';
     import { initializeApp } from 'firebase/app';
     import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
     import { getFirestore, initializeFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query } from 'firebase/firestore';
 
     // ==========================================
-    // 1. 安全設定區 (請在本地替換金鑰)
+    // 1. 金鑰填寫區 (請在本地替換)
     // ==========================================
     const API_KEYS = [
-      "AIzaSyBjRQBiQYoJGmhae2ONi-QskunwmQXjAi4", // 填入你的新金鑰 1
-      "AIzaSyByPp9L7eulgRCSwv5XrPyiSkKsCPHEvd4", // 填入你的新金鑰 2
-      "AIzaSyC5cOL9suiO6LeTNi9_1jKAemT5DTnTnqE"  // 填入你的新金鑰 3
+      "AIzaSyC5cOL9suiO6LeTNi9_1jKAemT5DTnTnqE", 
+      "AIzaSyByPp9L7eulgRCSwv5XrPyiSkKsCPHEvd4", 
+      "AIzaSyBjRQBiQYoJGmhae2ONi-QskunwmQXjAi4"
     ];
     let currentKeyIndex = 0;
 
@@ -55,27 +50,27 @@
     };
 
     // ==========================================
-    // 2. AI 呼叫邏輯 (2025 穩定版本)
+    // 2. 修正後的 AI 呼叫邏輯
     // ==========================================
     const callGeminiAI = async (prompt, imageParts = [], systemInstruction = "") => {
       const maxRetries = API_KEYS.length * 2;
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         const activeApiKey = API_KEYS[currentKeyIndex];
-        if (activeApiKey.includes("YOUR_NEW")) throw new Error("尚未替換 API 金鑰！");
-
+        
         try {
           const payload = { 
             contents: [{ parts: [{ text: prompt }, ...imageParts] }],
-            system_instruction: { // 2025 標準 REST 格式
+            // 2025 穩定版使用 system_instruction 欄位
+            system_instruction: { 
               parts: [{ text: systemInstruction || "你是一個專業菜單助理，請分析內容並回傳純 JSON 格式。" }] 
             },
             generationConfig: { 
-              responseMimeType: "application/json", // 強制輸出 JSON
+              responseMimeType: "application/json", 
               temperature: 0.1 
             }
           };
 
-          // 使用 v1 穩定版與最新的 gemini-2.5-flash 模型
+          // 修正重點：使用 v1 穩定路徑與正確的模型名稱
           const res = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${activeApiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -83,14 +78,17 @@
           });
 
           const data = await res.json();
+          
           if (!res.ok) {
-            console.warn(`Key ${currentKeyIndex} 報錯:`, data.error?.message);
+            // 如果報錯，自動換下一組金鑰重試
+            console.error(`API 錯誤 (Index ${currentKeyIndex}):`, data.error?.message);
             currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
             continue;
           }
 
           const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
           return JSON.parse(text.replace(/```json|```/g, "").trim());
+
         } catch (e) {
           currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
           if (attempt === maxRetries - 1) throw e;
@@ -99,8 +97,7 @@
       }
     };
 
-    // --- 以下為 App 主程式邏輯 (簡化版確保穩定運作) ---
-
+    // --- 主程式邏輯 ---
     function App() {
       const [liffLoading, setLiffLoading] = useState(true);
       const [lineProfile, setLineProfile] = useState(null);
@@ -109,15 +106,13 @@
       const [orders, setOrders] = useState([]);
       const [currentUser, setCurrentUser] = useState('');
       const [selectedStoreId, setSelectedStoreId] = useState(null);
-      const [cartItem, setCartItem] = useState(null); 
       const [toast, setToast] = useState(null);
       const [isAdmin, setIsAdmin] = useState(false);
       const [isAnalyzing, setIsAnalyzing] = useState(false);
       const [newStoreName, setNewStoreName] = useState('');
-      const [sugar, setSugar] = useState('正常糖');
-      const [ice, setIce] = useState('正常冰');
 
-      const db = useMemo(() => initializeFirestore(initializeApp(firebaseConfig), { experimentalForceLongPolling: true }), []);
+      const app = initializeApp(firebaseConfig);
+      const db = initializeFirestore(app, { experimentalForceLongPolling: true });
       const showToast = (msg, type = 'success') => setToast({ message: msg, type });
 
       useEffect(() => {
@@ -128,9 +123,10 @@
       }, []);
 
       useEffect(() => {
+        if (!db) return;
         const unsubS = onSnapshot(collection(db, 'artifacts', 'my-office-tea-v1', 'public', 'data', 'stores'), s => {
           const l = s.docs.map(d => ({ id: d.id, ...d.data() }));
-          setStores(l); if (l.length > 0) setSelectedStoreId(l[0].id);
+          setStores(l); if (l.length > 0 && !selectedStoreId) setSelectedStoreId(l[0].id);
         });
         const unsubO = onSnapshot(collection(db, 'artifacts', 'my-office-tea-v1', 'public', 'data', 'orders'), s => {
           setOrders(s.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -139,45 +135,54 @@
       }, [db]);
 
       const handleAIParse = async () => {
-        if (!newStoreName) return showToast('請輸入店家名', 'error');
+        if (!newStoreName) return showToast('請填寫內容', 'error');
         setIsAnalyzing(true);
+        showToast('AI 正在分析...', 'info');
         try {
-          const result = await callGeminiAI(`分析菜單文字：\n${newStoreName}`);
-          // 這裡實作將解析結果存入 Firebase 的邏輯
-          showToast('AI 解析成功！');
-        } catch (e) { showToast('解析失敗', 'error'); } finally { setIsAnalyzing(false); }
+          const result = await callGeminiAI(`分析這段菜單並整理成品項價格：\n${newStoreName}`);
+          // 這裡可以加入 addDoc 存入資料庫的邏輯
+          console.log("AI 解析結果:", result);
+          showToast('解析成功！');
+        } catch (e) { 
+          showToast('辨識失敗，請檢查金鑰限制設定', 'error'); 
+        } finally { 
+          setIsAnalyzing(false); 
+        }
       };
 
-      if (liffLoading) return <div className="h-screen flex items-center justify-center">驗證中...</div>;
+      if (liffLoading) return <div className="h-screen flex items-center justify-center font-bold text-teal-600">LINE 驗證中...</div>;
 
       return (
-        <div className="max-w-4xl mx-auto p-4 space-y-4">
-          <header className="bg-teal-600 text-white p-4 rounded-xl flex justify-between items-center shadow-lg">
-            <div className="flex items-center gap-2"><Coffee /> <span className="font-bold">{currentUser} 的下午茶</span></div>
-            <button onClick={() => setView(view === 'admin' ? 'order' : 'admin')} className="p-2 bg-white/20 rounded-lg"><Settings size={18}/></button>
+        <div className="max-w-md mx-auto min-h-screen flex flex-col p-4 space-y-4">
+          <header className="bg-teal-600 text-white p-4 rounded-2xl flex justify-between items-center shadow-lg">
+            <div className="flex items-center gap-2"><Coffee /> <span className="font-bold">{currentUser}</span></div>
+            <button onClick={() => setView(view === 'admin' ? 'order' : 'admin')} className="p-2 bg-white/20 rounded-xl"><Settings size={20}/></button>
           </header>
 
           {view === 'order' ? (
-            <div className="animate-fade-in space-y-4">
-               <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-4">
+               <div className="flex gap-2 overflow-x-auto pb-2">
                  {stores.map(s => (
-                   <button key={s.id} onClick={() => setSelectedStoreId(s.id)} className={`p-4 rounded-xl border-2 transition-all ${selectedStoreId === s.id ? 'border-teal-500 bg-teal-50' : 'bg-white'}`}>
-                     <div className="font-bold text-teal-800">{s.name}</div>
+                   <button key={s.id} onClick={() => setSelectedStoreId(s.id)} className={`px-4 py-2 rounded-full whitespace-nowrap border-2 transition-all ${selectedStoreId === s.id ? 'border-teal-500 bg-teal-50 text-teal-700 font-bold' : 'bg-white border-gray-200 text-gray-400'}`}>
+                     {s.name}
                    </button>
                  ))}
                </div>
+               <div className="bg-white p-8 rounded-3xl border-2 border-dashed border-gray-200 text-center text-gray-400">
+                 點擊上方店家開始點餐
+               </div>
             </div>
           ) : (
-            <div className="animate-fade-in bg-white p-6 rounded-xl border shadow-sm space-y-4">
-              <h2 className="font-bold text-lg">新增店家 (AI 模式)</h2>
-              <input value={newStoreName} onChange={e=>setNewStoreName(e.target.value)} className="w-full p-2 border rounded" placeholder="貼上菜單文字或名稱" />
-              <button onClick={handleAIParse} disabled={isAnalyzing} className="w-full bg-purple-600 text-white py-3 rounded-xl font-bold flex justify-center items-center gap-2">
-                {isAnalyzing ? <Loader2 className="animate-spin" /> : <Sparkles />} 開始 AI 辨識
+            <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-4">
+              <h2 className="font-bold text-xl text-gray-800 flex items-center gap-2"><Sparkles className="text-purple-500"/> AI 建立菜單</h2>
+              <textarea value={newStoreName} onChange={e=>setNewStoreName(e.target.value)} className="w-full p-4 border rounded-2xl bg-gray-50 h-32 outline-none focus:ring-2 focus:ring-purple-400" placeholder="貼上菜單文字內容..." />
+              <button onClick={handleAIParse} disabled={isAnalyzing} className="w-full bg-purple-600 text-white py-4 rounded-2xl font-bold flex justify-center items-center gap-2 shadow-lg shadow-purple-100 active:scale-95 transition-all">
+                {isAnalyzing ? <Loader2 className="animate-spin" /> : <Sparkles />} 開始 AI 解析
               </button>
             </div>
           )}
           
-          {toast && <div className={`fixed bottom-4 right-4 text-white px-6 py-3 rounded-lg shadow-lg ${toast.type === 'error' ? 'bg-red-500' : 'bg-teal-600'}`}>{toast.message}</div>}
+          {toast && <div className={`fixed bottom-10 left-1/2 -translate-x-1/2 text-white px-8 py-4 rounded-2xl shadow-2xl font-bold animate-bounce-in z-50 ${toast.type === 'error' ? 'bg-red-500' : 'bg-teal-600'}`}>{toast.message}</div>}
         </div>
       );
     }
