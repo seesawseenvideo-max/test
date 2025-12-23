@@ -60,7 +60,7 @@
     // ==========================================
     //  設定區域 (LINE / Firebase / Gemini)
     // ==========================================
-    const LIFF_ID = "2008746387-2t2kxxUX";
+    const LIFF_ID = "2008729022-PSf5NFFI";
     
     const firebaseConfig = {
       apiKey: "AIzaSyBJeC5O1DF2VpvoSE8OKjtPT4wYPYec-Ok",
@@ -72,7 +72,13 @@
       measurementId: "G-R5SV13TYTE"
     };
 
-    const apiKey = "AIzaSyA5NZj3l0DxdwlB_-J2F-qQ6TvnVittY34"; 
+    // 1. 實作 API Key Pool 自動輪轉機制
+    const API_KEY_POOL = [
+      "AIzaSyBP_YG-mC5BJre2LOou61aOSb7kfh0kTmU",
+      "AIzaSyC9KQKkWfoiwx8vIrZDvXRQA3Bfj-MVWLg",
+      "AIzaSyBnJ5RLHOrpp8XCi866o5JC0o-5BpMBT9s"
+    ];
+
     const appId = 'my-office-tea-v1';
 
     const DEFAULT_SUGAR = ['正常糖', '少糖', '半糖', '微糖', '無糖', '無'];
@@ -131,9 +137,10 @@
       const [selectedToppings, setSelectedToppings] = useState([]);
       const [editingOrderId, setEditingOrderId] = useState(null);
 
+      // --- 菜單查核相關 State ---
       const [auditText, setAuditText] = useState('');
       const [isAuditing, setIsAuditing] = useState(false);
-      const [auditResult, setAuditResult] = useState(null);
+      const [auditResult, setAuditResult] = useState(null); // { added: [], removed: [] }
 
       const showToast = (msg, type = 'success') => setToast({ message: msg, type });
 
@@ -161,28 +168,19 @@
       useEffect(() => {
         if (!auth || authInitiated.current) return;
         authInitiated.current = true;
-        
-        const performLogin = async (retryCount = 0) => {
-            if (auth.currentUser) {
-                setUser(auth.currentUser);
-                setIsOnline(true);
-                return;
-            }
-            try {
-                await signInAnonymously(auth);
-            } catch (error) {
-                console.error("Auth Error details:", error);
-                // Retry specifically for network errors
-                if (error.code === 'auth/network-request-failed' && retryCount < 5) {
-                    const delay = 1000 * Math.pow(2, retryCount); // Exponential backoff: 1s, 2s, 4s, 8s, 16s
-                    console.log(`Retrying auth in ${delay}ms...`);
-                    setTimeout(() => performLogin(retryCount + 1), delay);
-                }
-            }
+        const initAuth = async () => {
+          if (auth.currentUser) {
+            setUser(auth.currentUser);
+            setIsOnline(true);
+            return;
+          }
+          try { 
+            await signInAnonymously(auth); 
+          } catch (error) { 
+            if (error.code !== 'auth/too-many-requests') console.error("Auth Error:", error);
+          }
         };
-
-        performLogin();
-        
+        initAuth();
         const unsubscribe = onAuthStateChanged(auth, (u) => {
           setUser(u);
           setIsOnline(!!u);
@@ -221,46 +219,62 @@
         }
       }, [cartItem, selectedStoreId, stores, editingOrderId]);
 
+      // --- 修改後：支援 Key Rotation 的 Gemini 呼叫函式 ---
       const callGeminiAI = async (prompt, imageParts = [], systemInstruction = "") => {
-        const maxRetries = 5;
-        const delays = [1000, 2000, 4000, 8000, 16000];
         const defaultSystemPrompt = `你是一個專業的菜單助理。規則：回傳純 JSON 格式。`;
         
-        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        // 嘗試輪轉使用 API Key
+        for (let i = 0; i < API_KEY_POOL.length; i++) {
+          const currentKey = API_KEY_POOL[i];
           try {
             const payload = { 
               contents: [{ parts: [{ text: prompt }, ...imageParts] }],
               systemInstruction: { parts: [{ text: systemInstruction || defaultSystemPrompt }] },
               generationConfig: { responseMimeType: "application/json" }
             };
-            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+            
+            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${currentKey}`, {
+              method: 'POST', 
+              headers: { 'Content-Type': 'application/json' }, 
+              body: JSON.stringify(payload)
             });
+            
             const data = await res.json();
-            if (data.error) throw new Error(data.error.message);
+            
+            // 如果 API 回傳錯誤 (例如 429 Quota Exceeded 或 Key Invalid)，拋出錯誤以進入 Catch 區塊嘗試下一個 Key
+            if (data.error) {
+              console.warn(`API Key index ${i} failed:`, data.error.message);
+              throw new Error(data.error.message);
+            }
+            
             const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
             return JSON.parse(text);
-          } catch (e) { 
-            if (attempt === maxRetries) throw e;
-            await new Promise(r => setTimeout(r, delays[attempt]));
+
+          } catch (e) {
+            // 如果是最後一個 Key 也失敗，才真正拋出錯誤給 UI
+            if (i === API_KEY_POOL.length - 1) {
+              console.error("All API keys exhausted.");
+              throw e;
+            }
+            // 否則繼續迴圈嘗試下一個 Key
+            continue; 
           }
         }
       };
 
-      // 修正：更強健的價格解析，處理文字混雜或 NaN 問題
+      // --- 修改後：更嚴格的價格解析 ---
+      // 使用 replace(/[^0-9.]/g, '') 移除所有非數字與小數點的字元
       const parsePrice = (v) => {
-        if (typeof v === 'number' && !isNaN(v)) return v;
-        if (!v) return 0;
-        // 抓取字串中的第一個數字序列 (允許小數點)
-        const match = String(v).match(/(\d+(\.\d+)?)/);
-        return match ? parseFloat(match[0]) : 0;
+        if (typeof v === 'number') return v;
+        const cleanStr = String(v).replace(/[^0-9.]/g, '');
+        return parseFloat(cleanStr) || 0;
       };
 
       const handleAIParse = async (mode, files = null) => {
         if (!newStoreName.trim()) return showToast('請輸入店家名稱', 'error');
         if (mode === 'text' && !menuInputText.trim()) return showToast('請填寫文字', 'error');
         setIsAnalyzing(true);
-        showToast('AI 分析中...', 'info');
+        showToast('AI 分析中 (嘗試多組 API)...', 'info');
         try {
           let imageParts = [];
           if (mode === 'image' && files) {
@@ -272,12 +286,12 @@
           }
           const query = mode === 'image' ? "分析菜單圖片" : `分析內容：\n${menuInputText}`;
           
-          // 修正：優化 System Prompt，確保價格為數字，並處理多價格問題
+          // --- 修改後：優化 System Prompt 以加強數字提取 ---
           const systemPrompt = `你是一個專業的菜單整理助理。規則：
           1. 嚴禁翻譯名稱，保留原始繁體中文。
-          2. 【價格規則】：price 欄位必須是純數字 (Number)。若有大/中/小杯等多種價格 (如 50/60)，請一律取「較高」的價格作為單一價格。若無法判斷，請提取字串中的第一個數字。
-          3. 若品項名稱包含斜線 (如：紅茶/綠茶)，請拆分為多個獨立品項。
-          4. 回傳純 JSON 格式，必須包含 items (name, price), toppings (name, price), sugarOptions, iceOptions。`;
+          2. 【重要】價格必須是純數字，請自動移除「$」、「元」、「(大)」等非數字字符。
+          3. 若品項名稱包含斜線，拆分為多個獨立品項。
+          4. 回傳純 JSON 包含 items, toppings, sugarOptions, iceOptions。`;
           
           const result = await callGeminiAI(query, imageParts, systemPrompt);
           const tempStore = {
@@ -293,40 +307,33 @@
           editState.sugarStr = editState.sugarOptions.join(',');
           editState.iceStr = editState.iceOptions.join(',');
           
-          setEditingStore(editState);
-          
-          // 修正：狀態隔離，確保建立新店家時清空「查核」相關狀態，避免文字殘留
+          // --- 修改後：隔離狀態，清空查核相關資料 ---
+          setAuditText('');
           setAuditResult(null);
-          setAuditText(''); 
 
+          setEditingStore(editState);
           setNewStoreName(''); setNewStoreDescription(''); setNewStoreUrl(''); setMenuInputText('');
           showToast('辨識完成');
         } catch (e) { showToast(`失敗: ${e.message}`, 'error'); } finally { setIsAnalyzing(false); }
       };
 
+      // --- 菜單比對查核功能 ---
       const handleMenuAudit = async () => {
         if (!auditText.trim()) return showToast('請貼上網頁文字內容', 'error');
         setIsAuditing(true);
         showToast('正在與現有菜單進行比對...', 'info');
         try {
           const currentItems = editingStore.items.map(i => ({ name: i.name, price: i.price }));
-          
-          // 更新提示詞：強調只查核中文字品項名稱
           const systemPrompt = `你是一個資深店鋪查核員。
-          任務：比對【系統現有菜單】與【網頁最新文字內容】，找出差異。
-          
-          查核核心規則：
-          1. 【比對基準】：僅以「中文字品項名稱」作為唯一識別基準。
-          2. 【忽略內容】：忽略價格符號(如 $40)、貨幣符號、括號備註或英文後綴。
-          3. 【邏輯範例】：若網頁文字為『經典紅茶 $40』，請將其核心視為『經典紅茶』進行比對。
-          4. 【新增品項】：若網頁文字的核心品項名稱不在現有清單中，視為新增。
-          5. 【移除品項】：若現有清單中的名稱在網頁文字中完全找不到對應，視為移除。
-          
-          回傳格式為純 JSON: { added: [{name, price}], removed: [{name}] }`;
+          任務：比對【系統現有菜單】與【從網頁抓取的新文字】，找出差異。
+          規則：
+          1. 找出「網頁文字」中有，但「系統現有菜單」中沒有的品項（新增品項）。
+          2. 找出「系統現有菜單」中有，但「網頁文字」中明顯已消失或找不到的品項（已移除品項）。
+          3. 如果只是價格微調，請放入 added 區塊並註明新價格（價格請提供純數字）。
+          回傳純 JSON: { added: [{name, price}], removed: [{name}] }`;
 
           const userQuery = `
           系統現有菜單：${JSON.stringify(currentItems)}
-          
           網頁抓取文字內容：
           ${auditText}`;
 
@@ -344,7 +351,7 @@
         if (type === 'add') {
           setEditingStore(p => ({
             ...p,
-            items: [...p.items, { id: `audit-${Date.now()}`, name: item.name, price: Number(item.price), noSugar: false, noIce: false, allowNote: true }]
+            items: [...p.items, { id: `audit-${Date.now()}`, name: item.name, price: parsePrice(item.price), noSugar: false, noIce: false, allowNote: true }]
           }));
           setAuditResult(p => ({ ...p, added: p.added.filter(x => x.name !== item.name) }));
         } else if (type === 'remove') {
@@ -408,7 +415,6 @@
       const updateEditingTopping = (id, f, v) => setEditingStore(p => ({ ...p, toppings: (p.toppings || []).map(t => t.id === id ? { ...t, [f]: f === 'price' ? Number(v) : v } : t) }));
       const addToppingToEditing = () => setEditingStore(p => ({ ...p, toppings: [...(p.toppings || []), { id: `t-${Date.now()}`, name: '', price: 0 }] }));
       const removeToppingFromEditing = (id) => setEditingStore(p => ({ ...p, toppings: p.toppings.filter(t => t.id !== id) }));
-      
       const openEditStore = (store) => {
         const editState = JSON.parse(JSON.stringify(store));
         editState.sugarStr = (editState.sugarOptions || DEFAULT_SUGAR).join(',');
@@ -694,7 +700,7 @@
           {/* Modal: Cart */}
           {cartItem && (
             <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 z-50">
-              <div className="bg-white w-full max-md rounded-t-3xl sm:rounded-2xl shadow-2xl overflow-hidden animate-fade-in">
+              <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-2xl shadow-2xl overflow-hidden animate-fade-in">
                 <div className="p-4 bg-teal-50 border-b flex justify-between items-center">
                   <h3 className="font-bold text-teal-800 flex items-center gap-2"><ShoppingBag size={18}/> {cartItem.isCustom ? '自訂內容' : cartItem.name}</h3>
                   <button onClick={()=>{setCartItem(null); setEditingOrderId(null);}} className="p-1 hover:bg-teal-100 rounded-full"><X size={24}/></button>
@@ -783,27 +789,28 @@
                   <section className="bg-purple-50 p-4 rounded-xl border border-purple-100 space-y-3">
                     <div className="flex items-center justify-between">
                       <h4 className="font-bold text-purple-700 flex items-center gap-2 text-sm uppercase"><FileSearch size={18}/> AI 菜單查核驗證</h4>
-                      <div className="text-[10px] text-purple-400 font-medium">利用網頁文字比對中文字品項</div>
+                      <div className="text-[10px] text-purple-400 font-medium">利用網頁最新文字進行查核</div>
                     </div>
                     <div className="flex gap-2">
                       <textarea 
                         value={auditText} 
                         onChange={e=>setAuditText(e.target.value)} 
-                        placeholder="貼上網頁點單文字（如：經典紅茶 $40），AI 將自動忽略價格僅對比品項名稱..." 
+                        placeholder="請貼上該店點單網頁的品項文字內容，用來查核是否有新增或刪減的品項..." 
                         className="flex-1 p-2 border rounded text-xs min-h-[80px] focus:ring-2 focus:ring-purple-500 outline-none"
                       />
                       <button 
                         onClick={handleMenuAudit} 
                         disabled={isAuditing} 
-                        className="bg-purple-600 text-white px-4 rounded-lg font-bold text-sm flex flex-col items-center justify-center gap-1 hover:bg-purple-700 disabled:bg-gray-300 min-w-[80px] shadow-sm transition-all"
+                        className="bg-purple-600 text-white px-4 rounded-lg font-bold text-sm flex flex-col items-center justify-center gap-1 hover:bg-purple-700 disabled:bg-gray-300 min-w-[80px] shadow-sm"
                       >
                         {isAuditing ? <Loader2 className="animate-spin" size={20}/> : <ArrowRightLeft size={20}/>}
-                        <span className="text-[10px]">{isAuditing ? '查核中' : '名稱查核'}</span>
+                        <span className="text-[10px]">{isAuditing ? '比對中' : '開始比對'}</span>
                       </button>
                     </div>
 
                     {auditResult && (
                       <div className="space-y-3 animate-fade-in">
+                        {/* 新增品項查核結果 */}
                         {auditResult.added?.length > 0 && (
                           <div className="bg-white p-3 rounded-lg border border-green-200">
                             <h5 className="text-[10px] font-bold text-green-600 mb-2 flex items-center gap-1"><CheckCircle2 size={12}/> 發現網頁中有新增加的品項 ({auditResult.added.length})</h5>
@@ -817,9 +824,10 @@
                             </div>
                           </div>
                         )}
+                        {/* 消失品項查核結果 */}
                         {auditResult.removed?.length > 0 && (
                           <div className="bg-white p-3 rounded-lg border border-red-200">
-                            <h5 className="text-[10px] font-bold text-red-600 mb-2 flex items-center gap-1"><AlertCircle size={12}/> 原清單有但網頁文字中找不到的名稱 ({auditResult.removed.length})</h5>
+                            <h5 className="text-[10px] font-bold text-red-600 mb-2 flex items-center gap-1"><AlertCircle size={12}/> 原菜單中有，但網頁文字中找不到的品項 ({auditResult.removed.length})</h5>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                               {auditResult.removed.map((item, idx) => (
                                 <div key={idx} className="flex justify-between items-center bg-red-50/50 p-2 rounded text-xs border border-red-100 line-through text-gray-400">
@@ -832,17 +840,17 @@
                         )}
                         {auditResult.added?.length === 0 && auditResult.removed?.length === 0 && (
                           <div className="bg-white p-3 rounded-lg border border-gray-200 text-center text-xs text-gray-500 font-bold">
-                            ✨ 查核完成！品項名稱完全一致。
+                            ✨ 查核完成！現有菜單與網頁文字內容完全一致。
                           </div>
                         )}
                       </div>
                     )}
                   </section>
                   
-                  {/* 選項設定區 */}
+                  {/* 選項設定區 (糖、冰) */}
                   <section className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 uppercase">糖度選項</label><input type="text" value={editingStore.sugarStr || ''} onChange={e=>setEditingStore({...editingStore, sugarStr: e.target.value})} className="w-full p-2 border rounded text-sm" /></div>
-                    <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 uppercase">冰塊選項</label><input type="text" value={editingStore.iceStr || ''} onChange={e=>setEditingStore({...editingStore, iceStr: e.target.value})} className="w-full p-2 border rounded text-sm" /></div>
+                    <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 uppercase">糖度選項 (逗號分隔)</label><input type="text" value={editingStore.sugarStr || ''} onChange={e=>setEditingStore({...editingStore, sugarStr: e.target.value})} className="w-full p-2 border rounded text-sm" /></div>
+                    <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 uppercase">冰塊選項 (逗號分隔)</label><input type="text" value={editingStore.iceStr || ''} onChange={e=>setEditingStore({...editingStore, iceStr: e.target.value})} className="w-full p-2 border rounded text-sm" /></div>
                   </section>
                   
                   {/* 品項管理區 */}
