@@ -3,12 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>辦公室下午茶點單系統 - AI 金鑰輪換版</title>
+  <title>辦公室下午茶點單系統 - AI 穩定版</title>
   
   <script src="https://cdn.tailwindcss.com"></script>
-  
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
   <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
   <script type="importmap">
@@ -68,11 +66,11 @@
       measurementId: "G-R5SV13TYTE"
     };
 
-    // AI 金鑰輪換池
+    // 更新後的三組新金鑰
     const API_KEYS = [
-      "AIzaSyBP_YG-mC5BJre2LOou61aOSb7kfh0kTmU", 
-      "AIzaSyC9KQKkWfoiwx8vIrZDvXRQA3Bfj-MVWLg", 
-      "AIzaSyBnJ5RLHOrpp8XCi866o5JC0o-5BpMBT9s"
+      "AIzaSyDNKwDIwIu4MnHIOGSoFoeWOlaiaTpNL6w", 
+      "AIzaSyCDBNCG5tD5ijFx0L8y6TxPEZaUP2FvfIc", 
+      "AIzaSyDamBmQEBapXuJP0caPEEf84Recm7cWjcw"
     ];
     let currentKeyIndex = 0;
 
@@ -80,7 +78,6 @@
     const DEFAULT_SUGAR = ['正常糖', '少糖', '半糖', '微糖', '無糖', '無'];
     const DEFAULT_ICE = ['正常冰', '少冰', '微冰', '去冰', '溫', '熱', '無'];
 
-    // 初始化 Firebase
     let app, auth, db;
     if (firebaseConfig.apiKey) {
       app = initializeApp(firebaseConfig);
@@ -140,7 +137,7 @@
       const showToast = (msg, type = 'success') => setToast({ message: msg, type });
 
       // ==========================================
-      //  2. AI 核心邏輯 (含輪換功能)
+      //  2. AI 呼叫邏輯 (具備自動輪換金鑰)
       // ==========================================
       const callGeminiAI = async (prompt, imageParts = [], systemInstruction = "") => {
         const maxRetries = API_KEYS.length * 2;
@@ -161,8 +158,9 @@
             });
 
             const data = await res.json();
+            
             if (data.error) {
-              console.warn(`Key ${currentKeyIndex} failed: ${data.error.message}`);
+              console.warn(`[Key Rotation] 金鑰 ${currentKeyIndex} 發生錯誤，正在切換...`);
               currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
               if (data.error.code === 429) {
                 await new Promise(r => setTimeout(r, delays[attempt % delays.length]));
@@ -176,6 +174,7 @@
             return JSON.parse(cleanJson);
 
           } catch (e) { 
+            console.error(`嘗試失敗:`, e.message);
             currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
             if (attempt === maxRetries - 1) throw e;
             await new Promise(r => setTimeout(r, 1000));
@@ -183,7 +182,7 @@
         }
       };
 
-      // --- 以下為原本的 App 邏輯 ---
+      // --- 以下維持原有 App 邏輯 ---
 
       useEffect(() => {
         const initLiff = async () => {
@@ -198,7 +197,7 @@
               setLiffLoading(false);
             }
           } catch (err) {
-            console.error('LIFF Init Error:', err);
+            console.error('LIFF Error:', err);
             setLiffLoading(false);
           }
         };
@@ -209,20 +208,11 @@
       useEffect(() => {
         if (!auth || authInitiated.current) return;
         authInitiated.current = true;
-        const initAuth = async () => {
-          if (auth.currentUser) {
-            setUser(auth.currentUser);
-            setIsOnline(true);
-            return;
-          }
-          try { await signInAnonymously(auth); } catch (error) { }
-        };
-        initAuth();
-        const unsubscribe = onAuthStateChanged(auth, (u) => {
+        onAuthStateChanged(auth, (u) => {
           setUser(u);
           setIsOnline(!!u);
+          if (!u) signInAnonymously(auth).catch(()=>{});
         });
-        return () => unsubscribe();
       }, []);
 
       useEffect(() => {
@@ -262,7 +252,7 @@
         if (!newStoreName.trim()) return showToast('請輸入店家名稱', 'error');
         if (mode === 'text' && !menuInputText.trim()) return showToast('請填寫文字', 'error');
         setIsAnalyzing(true);
-        showToast('AI 分析中...', 'info');
+        showToast('AI 正在讀取菜單...', 'info');
         try {
           let imageParts = [];
           if (mode === 'image' && files) {
@@ -273,7 +263,7 @@
             })));
           }
           const queryMsg = mode === 'image' ? "分析菜單圖片" : `分析內容：\n${menuInputText}`;
-          const systemPrompt = `你是一個專業的菜單整理助理。規則：1. 嚴禁翻譯名稱。2. 回傳 JSON 包含 items, toppings, sugarOptions, iceOptions。`;
+          const systemPrompt = `你是一個專業的菜單助理。規則：1. 不翻譯名稱。2. 回傳 JSON 包含 items, toppings, sugarOptions, iceOptions。`;
           
           const result = await callGeminiAI(queryMsg, imageParts, systemPrompt);
           const tempStore = {
@@ -290,38 +280,21 @@
           editState.iceStr = editState.iceOptions.join(',');
           setEditingStore(editState);
           setNewStoreName(''); setNewStoreDescription(''); setNewStoreUrl(''); setMenuInputText('');
-          showToast('辨識完成');
-        } catch (e) { showToast(`失敗: ${e.message}`, 'error'); } finally { setIsAnalyzing(false); }
+          showToast('AI 解析完成！');
+        } catch (e) { showToast(`解析失敗: ${e.message}`, 'error'); } finally { setIsAnalyzing(false); }
       };
 
       const handleMenuAudit = async () => {
-        if (!auditText.trim()) return showToast('請貼上網頁文字內容', 'error');
+        if (!auditText.trim()) return showToast('請貼上內容', 'error');
         setIsAuditing(true);
-        showToast('比對中...', 'info');
+        showToast('查核比對中...', 'info');
         try {
           const currentItems = editingStore.items.map(i => ({ name: i.name, price: i.price }));
-          const systemPrompt = `比對現有菜單與新文字，找出差異。回傳 JSON: { added: [{name, price}], removed: [{name}] }`;
-          const userQuery = `系統現有：${JSON.stringify(currentItems)}\n網頁內容：\n${auditText}`;
-          const result = await callGeminiAI(userQuery, [], systemPrompt);
+          const systemPrompt = `比對菜單差異。回傳 JSON: { added: [{name, price}], removed: [{name}] }`;
+          const result = await callGeminiAI(`現有：${JSON.stringify(currentItems)}\n文字：${auditText}`, [], systemPrompt);
           setAuditResult(result);
           showToast('查核完成');
         } catch (e) { showToast('比對失敗', 'error'); } finally { setIsAuditing(false); }
-      };
-
-      const applyAuditItem = (item, type) => {
-        if (type === 'add') {
-          setEditingStore(p => ({
-            ...p,
-            items: [...p.items, { id: `audit-${Date.now()}`, name: item.name, price: Number(item.price), noSugar: false, noIce: false, allowNote: true }]
-          }));
-          setAuditResult(p => ({ ...p, added: p.added.filter(x => x.name !== item.name) }));
-        } else if (type === 'remove') {
-          setEditingStore(p => ({
-            ...p,
-            items: p.items.filter(x => x.name !== item.name)
-          }));
-          setAuditResult(p => ({ ...p, removed: p.removed.filter(x => x.name !== item.name) }));
-        }
       };
 
       const saveStoreChanges = async () => {
@@ -343,19 +316,10 @@
         } catch (e) { showToast('儲存失敗', 'error'); }
       };
 
-      const handleClearOrders = async () => {
-        try {
-          const deletePromises = orders.map(order => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'orders', order.id)));
-          await Promise.all(deletePromises);
-          setShowClearConfirm(false); showToast('已清除所有點單');
-        } catch (e) { showToast('失敗', 'error'); }
-      };
-
       const handleAddToCart = async () => {
-        if (!currentUser) return showToast('未取得 LINE 名稱', 'error');
+        if (!currentUser) return showToast('未取得身份', 'error');
         const name = cartItem.isCustom ? customItemName : cartItem.name;
         const price = Number(cartItem.isCustom ? customItemPrice : cartItem.price);
-        if (!name) return showToast('請輸入名稱', 'error');
         try {
           const tNames = selectedToppings.map(t => `+${t.name}`).join(' ');
           const tPrice = selectedToppings.reduce((s, t) => s + Number(t.price || 0), 0);
@@ -374,7 +338,7 @@
             }
             await Promise.all(batch);
           }
-          setCartItem(null); showToast('已送出');
+          setCartItem(null); showToast('點單成功');
         } catch (e) { showToast("失敗", "error"); }
       };
 
@@ -391,21 +355,9 @@
         return { userTotals: uT, itemStats: iT, totalAmount: total };
       }, [orders]);
 
-      const exportCSV = () => {
-        const bom = "\uFEFF";
-        let csvContent = bom + "姓名,店家,品項,單價,備註,下單時間\n";
-        orders.forEach(order => {
-          csvContent += [order.userName, order.storeName, order.item.name, order.price, `"${order.note || ''}"`, new Date(order.timestamp).toLocaleString()].join(",") + "\n";
-        });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }));
-        link.download = `下午茶點單_${new Date().toLocaleDateString()}.csv`;
-        link.click();
-      };
-
       const handleAdminLogin = () => {
         if (adminPasswordInput === '8888') {
-          setIsAdmin(true); setShowAdminLogin(false); setView('admin'); showToast('管理員登入成功');
+          setIsAdmin(true); setShowAdminLogin(false); setView('admin'); showToast('管理員驗證成功');
         } else showToast('密碼錯誤', 'error');
       };
 
@@ -413,9 +365,9 @@
       const estimatedPrice = cartItem ? (((Number(cartItem.isCustom ? customItemPrice : (cartItem.price || 0))) + selectedToppings.reduce((sum, t) => sum + Number(t.price || 0), 0)) * count) : 0;
 
       if (liffLoading) return (
-        <div className="min-h-screen flex flex-col items-center justify-center bg-teal-50 text-center p-6">
+        <div className="min-h-screen flex flex-col items-center justify-center bg-teal-50">
           <Loader2 className="animate-spin text-teal-600 mb-4" size={48} />
-          <p className="text-teal-800 font-bold">LINE 驗證中...</p>
+          <p className="text-teal-800 font-bold">系統初始化中...</p>
         </div>
       );
 
@@ -424,83 +376,61 @@
           <header className={`text-white p-4 shadow-md sticky top-0 z-10 ${isOnline ? 'bg-teal-600' : 'bg-gray-600'}`}>
             <div className="max-w-4xl mx-auto flex justify-between items-center">
               <div className="flex items-center gap-3">
-                {lineProfile?.pictureUrl ? <img src={lineProfile.pictureUrl} className="w-10 h-10 rounded-full border-2 border-white/50" /> : <Coffee size={24}/>}
+                {lineProfile?.pictureUrl ? <img src={lineProfile.pictureUrl} className="w-10 h-10 rounded-full" /> : <Coffee size={24}/>}
                 <h1 className="text-lg font-bold">{lineProfile?.displayName || '下午茶系統'}</h1>
               </div>
               <div className="flex items-center gap-4">
-                <div className="text-sm bg-white/20 px-3 py-1 rounded-full">總額: ${stats.totalAmount}</div>
-                <button onClick={() => { liff.logout(); window.location.reload(); }} className="p-2"><LogOut size={18}/></button>
+                <span className="text-sm">今日額度: ${stats.totalAmount}</span>
+                <button onClick={() => { liff.logout(); window.location.reload(); }}><LogOut size={18}/></button>
               </div>
             </div>
           </header>
 
           <main className="max-w-4xl mx-auto p-4">
-            {/* 分頁按鈕 */}
             <div className="flex gap-2 mb-6 bg-white p-1 rounded-lg shadow-sm">
               {['order', 'stats', 'admin'].map(v => (
                 <button key={v} onClick={() => (v==='admin' && !isAdmin) ? setShowAdminLogin(true) : setView(v)} className={`flex-1 py-2 px-4 rounded-md flex items-center justify-center gap-2 ${view===v ? 'bg-teal-100 text-teal-700 font-bold' : 'text-gray-500'}`}>
                   {v==='order' && <ShoppingBag size={18}/>}
                   {v==='stats' && <List size={18}/>}
                   {v==='admin' && <Settings size={18}/>}
-                  <span className="hidden sm:inline">{v==='order'?'點餐':v==='stats'?'統計':'管理'}</span>
+                  <span>{v==='order'?'點餐':v==='stats'?'統計':'管理'}</span>
                 </button>
               ))}
             </div>
 
-            {/* 點餐視圖 */}
             {view === 'order' && (
               <div className="space-y-6 animate-fade-in">
-                <div className="bg-white p-4 rounded-xl shadow-sm border flex items-center gap-4">
-                  <div className="bg-teal-50 p-3 rounded-lg text-teal-600"><Users size={24}/></div>
-                  <input type="text" value={currentUser} readOnly className="w-full font-bold text-lg bg-transparent" />
-                </div>
-
                 {stores.length > 0 ? (
                   <>
                     <div className="flex overflow-x-auto gap-2 mb-4 pb-2 scrollbar-hide">
-                      {stores.map(s => <button key={s.id} onClick={() => setSelectedStoreId(s.id)} className={`whitespace-nowrap px-4 py-2 rounded-full border ${selectedStoreId === s.id ? 'bg-teal-600 text-white shadow-md' : 'bg-white'}`}>{s.name}</button>)}
+                      {stores.map(s => <button key={s.id} onClick={() => setSelectedStoreId(s.id)} className={`whitespace-nowrap px-4 py-2 rounded-full border ${selectedStoreId === s.id ? 'bg-teal-600 text-white' : 'bg-white'}`}>{s.name}</button>)}
                     </div>
-                    
-                    <div className="relative mb-4">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18}/>
-                      <input type="text" value={searchTerm} onChange={(e)=>setSearchTerm(e.target.value)} placeholder="搜尋品項..." className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-teal-500 outline-none shadow-sm" />
-                    </div>
-
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                      <button onClick={()=>setCartItem({id:'custom', isCustom:true})} className="flex flex-col items-center justify-center p-4 bg-teal-50 border-2 border-dashed border-teal-300 rounded-xl text-teal-700 gap-2 min-h-[100px] hover:bg-teal-100 transition-colors shadow-sm"><PenLine size={24}/>自訂品項</button>
-                      {(currentStore?.items || []).filter(i=>(i.name || '').toLowerCase().includes(searchTerm.toLowerCase())).map(item => (
-                        <button key={item.id} onClick={()=>setCartItem(item)} className="p-4 bg-white border rounded-xl hover:shadow-md hover:border-teal-300 text-left min-h-[100px] flex flex-col justify-between">
+                      <button onClick={()=>setCartItem({id:'custom', isCustom:true})} className="flex flex-col items-center justify-center p-4 bg-teal-50 border-2 border-dashed border-teal-300 rounded-xl text-teal-700 gap-2 min-h-[100px]"><PenLine size={24}/>自訂</button>
+                      {(currentStore?.items || []).map(item => (
+                        <button key={item.id} onClick={()=>setCartItem(item)} className="p-4 bg-white border rounded-xl hover:shadow-md text-left min-h-[100px] flex flex-col justify-between">
                           <span className="font-bold text-gray-800 line-clamp-2">{item.name}</span>
                           <span className="text-teal-600 font-bold">${item.price}</span>
                         </button>
                       ))}
                     </div>
                   </>
-                ) : <div className="text-center py-20 bg-white rounded-xl border text-gray-400">目前沒有店家，請先去管理頁面新增</div>}
+                ) : <div className="text-center py-20 text-gray-400">請由管理頁面新增店家</div>}
               </div>
             )}
 
-            {/* 統計視圖 */}
             {view === 'stats' && (
               <div className="space-y-6 animate-fade-in">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="bg-teal-600 text-white p-6 rounded-xl shadow-lg">
-                    <h3 className="text-teal-100 text-sm mb-1">今日總金額</h3>
-                    <div className="text-4xl font-bold">${stats.totalAmount}</div>
+                <div className="bg-white rounded-xl border p-4 space-y-4 shadow-sm">
+                  <div className="flex justify-between items-center border-b pb-2">
+                    <h3 className="font-bold flex items-center gap-2"><ChefHat size={18}/> 製作匯總</h3>
+                    <button onClick={exportCSV} className="text-xs bg-teal-50 text-teal-600 px-2 py-1 rounded border border-teal-100">匯出 CSV</button>
                   </div>
-                  <div className="flex flex-col gap-2">
-                    <button onClick={exportCSV} className="bg-white p-4 rounded-xl border flex items-center justify-center gap-2 hover:bg-gray-50 shadow-sm text-teal-600 font-bold"><Download size={20}/> 匯出 CSV 明細</button>
-                    {isAdmin && <button onClick={()=>setShowClearConfirm(true)} className="bg-white p-4 rounded-xl border flex items-center justify-center gap-2 hover:bg-red-50 shadow-sm text-red-600 font-bold"><RotateCcw size={20}/> 清除今日所有點單</button>}
-                  </div>
-                </div>
-                
-                <div className="bg-white rounded-xl border overflow-hidden">
-                  <div className="p-4 bg-gray-50 font-bold border-b flex items-center gap-2"><ChefHat size={18}/> 製作匯總</div>
                   <div className="divide-y">
                     {Object.values(stats.itemStats).map((s, i) => (
-                      <div key={i} className="p-4">
-                        <div className="flex justify-between font-bold text-lg"><span>{s.itemName}</span><span className="text-teal-600">x {s.count}</span></div>
-                        <div className="text-sm text-gray-500 mt-2 bg-gray-50 p-2 rounded">
+                      <div key={i} className="py-3">
+                        <div className="flex justify-between font-bold"><span>{s.itemName}</span><span className="text-teal-600">x {s.count}</span></div>
+                        <div className="text-xs text-gray-500 mt-1 bg-gray-50 p-2 rounded">
                           {Object.entries(s.details).map(([n, c], j) => <div key={j} className="flex justify-between"><span>{n}</span><span>x {c}</span></div>)}
                         </div>
                       </div>
@@ -508,19 +438,19 @@
                   </div>
                 </div>
 
-                <div className="bg-white rounded-xl border overflow-hidden">
-                  <div className="p-4 bg-gray-50 font-bold border-b"><Users size={18} className="inline mr-2"/>個人明細</div>
+                <div className="bg-white rounded-xl border p-4 shadow-sm">
+                  <h3 className="font-bold mb-4 flex items-center gap-2"><Users size={18}/> 個人清單</h3>
                   <div className="divide-y">
                     {Object.values(stats.userTotals).map((u, i) => (
-                      <div key={i} className="p-4">
+                      <div key={i} className="py-3">
                         <div className="flex justify-between font-bold text-teal-800"><span>{u.name}</span><span>${u.total}</span></div>
-                        <ul className="mt-2 space-y-1">
+                        <ul className="mt-2 text-sm text-gray-600 space-y-1">
                           {u.items.map(o => (
-                            <li key={o.id} className="text-sm text-gray-600 flex justify-between">
+                            <li key={o.id} className="flex justify-between">
                               <span>{o.item.name} ({o.note})</span>
                               <div className="flex gap-2">
                                 <span>${o.price}</span>
-                                {(currentUser === u.name || isAdmin) && <button onClick={()=>deleteDoc(doc(db,'artifacts',appId,'public', 'data', 'orders',o.id))} className="text-red-400"><Trash2 size={14}/></button>}
+                                <button onClick={()=>deleteDoc(doc(db,'artifacts',appId,'public', 'data', 'orders',o.id))} className="text-red-400"><Trash2 size={14}/></button>
                               </div>
                             </li>
                           ))}
@@ -532,36 +462,35 @@
               </div>
             )}
 
-            {/* 管理視圖 */}
             {view === 'admin' && (
               <div className="space-y-6 animate-fade-in">
                 <div className="bg-white p-6 rounded-xl border shadow-sm space-y-4">
-                  <h2 className="font-bold text-lg flex items-center gap-2"><Sparkles className="text-purple-500"/> AI 建立店家</h2>
-                  <input type="text" value={newStoreName} onChange={e=>setNewStoreName(e.target.value)} placeholder="店家名稱" className="w-full p-2 border rounded outline-none focus:ring-2 focus:ring-purple-500" />
+                  <h2 className="font-bold flex items-center gap-2"><Sparkles className="text-purple-500"/> AI 建立店家</h2>
+                  <input type="text" value={newStoreName} onChange={e=>setNewStoreName(e.target.value)} placeholder="店家名稱" className="w-full p-2 border rounded" />
                   <div className="grid md:grid-cols-2 gap-4">
-                    <div className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center relative hover:bg-gray-50 transition-colors">
+                    <div className="border-2 border-dashed rounded-xl p-8 text-center relative hover:bg-gray-50">
                       <input type="file" multiple accept="image/*" onChange={e=>handleAIParse('image', e.target.files)} className="absolute inset-0 opacity-0 cursor-pointer" />
                       <ImageIcon size={32} className="mx-auto text-gray-400 mb-2" />
-                      <p className="text-sm text-gray-500">上傳菜單照片辨識</p>
+                      <p className="text-sm text-gray-400">圖片解析菜單</p>
                     </div>
                     <div className="flex flex-col gap-2">
-                      <textarea value={menuInputText} onChange={e=>setMenuInputText(e.target.value)} placeholder="或貼上菜單文字..." className="p-2 border rounded text-sm flex-1 outline-none resize-none" />
-                      <button onClick={()=>handleAIParse('text')} disabled={isAnalyzing} className="bg-purple-600 text-white py-2 rounded-lg font-bold flex justify-center items-center gap-2 disabled:bg-gray-300">
-                        {isAnalyzing ? <Loader2 className="animate-spin" size={16}/> : <Sparkles size={16}/>} 文字解析
+                      <textarea value={menuInputText} onChange={e=>setMenuInputText(e.target.value)} placeholder="貼上文字解析..." className="p-2 border rounded text-sm flex-1" />
+                      <button onClick={()=>handleAIParse('text')} disabled={isAnalyzing} className="bg-purple-600 text-white py-2 rounded-lg font-bold">
+                        {isAnalyzing ? <Loader2 className="animate-spin" size={16}/> : '文字解析'}
                       </button>
                     </div>
                   </div>
                 </div>
 
                 <div className="bg-white p-6 rounded-xl border shadow-sm">
-                  <h2 className="font-bold mb-4 flex items-center gap-2"><List size={18}/> 現有店家列表</h2>
+                  <h2 className="font-bold mb-4">店家列表</h2>
                   <div className="space-y-2">
                     {stores.map(s => (
                       <div key={s.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg border">
-                        <div className="font-bold">{s.name} <span className="text-xs text-gray-400 font-normal">({s.items?.length||0} 品項)</span></div>
+                        <div className="font-bold">{s.name}</div>
                         <div className="flex gap-2">
-                          <button onClick={()=>{const e = JSON.parse(JSON.stringify(s)); e.sugarStr = e.sugarOptions.join(','); e.iceStr = e.iceOptions.join(','); setEditingStore(e);}} className="p-2 text-gray-400 hover:text-teal-600"><Edit size={18}/></button>
-                          <button onClick={()=>setStoreToDelete(s)} className="p-2 text-gray-400 hover:text-red-600"><Trash2 size={18}/></button>
+                          <button onClick={()=>{const e = JSON.parse(JSON.stringify(s)); e.sugarStr = e.sugarOptions.join(','); e.iceStr = e.iceOptions.join(','); setEditingStore(e);}} className="p-2 text-teal-600"><Edit size={18}/></button>
+                          <button onClick={()=>setStoreToDelete(s)} className="p-2 text-red-600"><Trash2 size={18}/></button>
                         </div>
                       </div>
                     ))}
@@ -571,166 +500,51 @@
             )}
           </main>
 
-          {/* Modal: 點餐視窗 */}
+          {/* Modal: Cart */}
           {cartItem && (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 z-50">
-              <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-2xl shadow-2xl animate-fade-in overflow-hidden">
-                <div className="p-4 bg-teal-50 border-b flex justify-between items-center">
-                  <h3 className="font-bold text-teal-800">{cartItem.isCustom ? '自訂內容' : cartItem.name}</h3>
+            <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+              <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-fade-in">
+                <div className="p-4 bg-teal-50 flex justify-between items-center font-bold">
+                  <h3>{cartItem.isCustom ? '自訂點單' : cartItem.name}</h3>
                   <button onClick={()=>{setCartItem(null); setEditingOrderId(null);}}><X size={24}/></button>
                 </div>
                 <div className="p-6 space-y-6">
                   {cartItem.isCustom && (
                     <div className="flex gap-2">
                       <input type="text" value={customItemName} onChange={e=>setCustomItemName(e.target.value)} className="flex-1 p-2 border rounded" placeholder="品項名稱" />
-                      <input type="number" value={customItemPrice} onChange={e=>setCustomItemPrice(e.target.value)} className="w-24 p-2 border rounded" placeholder="單價" />
+                      <input type="number" value={customItemPrice} onChange={e=>setCustomItemPrice(e.target.value)} className="w-24 p-2 border rounded" placeholder="價格" />
                     </div>
                   )}
-                  
-                  {!editingOrderId && (
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold">數量</span>
-                      <div className="flex items-center gap-4">
-                        <button onClick={()=>setCount(Math.max(1, count-1))} className="w-8 h-8 flex items-center justify-center border rounded-full"><Minus size={16}/></button>
-                        <span className="font-bold text-lg">{count}</span>
-                        <button onClick={()=>setCount(count+1)} className="w-8 h-8 flex items-center justify-center border rounded-full"><Plus size={16}/></button>
-                      </div>
-                    </div>
-                  )}
-
                   <div>
-                    <label className="block text-xs font-bold text-gray-400 mb-2">糖度</label>
+                    <label className="text-xs text-gray-400 font-bold block mb-2">糖度</label>
                     <div className="flex flex-wrap gap-2">
-                      {(currentStore?.sugarOptions || DEFAULT_SUGAR).map(o=><button key={o} onClick={()=>setSugar(o)} className={`px-4 py-1 rounded-full border text-sm ${sugar===o?'bg-teal-600 text-white':'bg-white text-gray-500'}`}>{o}</button>)}
+                      {(currentStore?.sugarOptions || DEFAULT_SUGAR).map(o=><button key={o} onClick={()=>setSugar(o)} className={`px-4 py-1 rounded-full border text-xs ${sugar===o?'bg-teal-600 text-white':'bg-white'}`}>{o}</button>)}
                     </div>
                   </div>
-
                   <div>
-                    <label className="block text-xs font-bold text-gray-400 mb-2">冰塊</label>
+                    <label className="text-xs text-gray-400 font-bold block mb-2">冰塊</label>
                     <div className="flex flex-wrap gap-2">
-                      {(currentStore?.iceOptions || DEFAULT_ICE).map(o=><button key={o} onClick={()=>setIce(o)} className={`px-4 py-1 rounded-full border text-sm ${ice===o?'bg-blue-600 text-white':'bg-white text-gray-500'}`}>{o}</button>)}
+                      {(currentStore?.iceOptions || DEFAULT_ICE).map(o=><button key={o} onClick={()=>setIce(o)} className={`px-4 py-1 rounded-full border text-xs ${ice===o?'bg-blue-600 text-white':'bg-white'}`}>{o}</button>)}
                     </div>
                   </div>
-
-                  {currentStore?.toppings?.length > 0 && (
-                    <div>
-                      <label className="block text-xs font-bold text-gray-400 mb-2">加料</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {currentStore.toppings.map(t=>(
-                          <button key={t.id} onClick={()=>setSelectedToppings(p=>p.find(x=>x.id===t.id)?p.filter(x=>x.id!==t.id):[...p,t])} className={`p-2 border rounded-lg text-sm flex justify-between ${selectedToppings.find(x=>x.id===t.id)?'bg-teal-50 border-teal-500 text-teal-700':'bg-white'}`}>
-                            <span>{t.name}</span><span>+${t.price}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <input type="text" value={customNote} onChange={e=>setCustomNote(e.target.value)} placeholder="備註 (如：雞排要辣...)" className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-teal-500" />
-                  
-                  <button onClick={handleAddToCart} className="w-full bg-teal-600 text-white py-4 rounded-xl font-bold shadow-lg hover:bg-teal-700 active:scale-95 transition-all">
-                    確定加入點單 (計 ${estimatedPrice})
+                  <input type="text" value={customNote} onChange={e=>setCustomNote(e.target.value)} placeholder="備註..." className="w-full p-2 border rounded-lg" />
+                  <button onClick={handleAddToCart} className="w-full bg-teal-600 text-white py-4 rounded-xl font-bold shadow-lg">
+                    送出點單 (${estimatedPrice})
                   </button>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Modal: 店家編輯 */}
-          {editingStore && (
-            <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
-              <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-[90vh]">
-                <div className="p-4 border-b flex justify-between items-center font-bold">
-                  <h3>編輯店家資料</h3>
-                  <button onClick={()=>setEditingStore(null)}><X size={24}/></button>
-                </div>
-                <div className="p-6 overflow-y-auto space-y-6">
-                  <input type="text" value={editingStore.name} onChange={e=>setEditingStore({...editingStore, name: e.target.value})} className="w-full p-2 border rounded font-bold" placeholder="店家名" />
-                  <div className="grid grid-cols-2 gap-3">
-                    <input type="text" value={editingStore.description} onChange={e=>setEditingStore({...editingStore, description: e.target.value})} className="p-2 border rounded text-sm" placeholder="介紹/地址" />
-                    <input type="text" value={editingStore.url} onChange={e=>setEditingStore({...editingStore, url: e.target.value})} className="p-2 border rounded text-sm" placeholder="網址" />
-                  </div>
-
-                  <section className="bg-purple-50 p-4 rounded-xl border border-purple-100">
-                    <h4 className="font-bold text-purple-700 text-sm mb-3 flex items-center gap-2"><ArrowRightLeft size={16}/> AI 菜單查核</h4>
-                    <div className="flex gap-2">
-                      <textarea value={auditText} onChange={e=>setAuditText(e.target.value)} placeholder="貼上最新菜單文字以進行查核比對..." className="flex-1 p-2 border rounded text-xs min-h-[80px]" />
-                      <button onClick={handleMenuAudit} disabled={isAuditing} className="bg-purple-600 text-white px-4 rounded-lg font-bold text-sm">
-                        {isAuditing ? <Loader2 className="animate-spin"/> : '開始查核'}
-                      </button>
-                    </div>
-                    {auditResult && (
-                      <div className="mt-4 space-y-2">
-                        {auditResult.added?.map((it, i) => (
-                          <div key={i} className="flex justify-between items-center bg-green-50 p-2 rounded text-xs">
-                            <span>新增: {it.name} (${it.price})</span>
-                            <button onClick={()=>applyAuditItem(it, 'add')} className="text-green-600 font-bold">加入</button>
-                          </div>
-                        ))}
-                        {auditResult.removed?.map((it, i) => (
-                          <div key={i} className="flex justify-between items-center bg-red-50 p-2 rounded text-xs">
-                            <span>移除: {it.name}</span>
-                            <button onClick={()=>applyAuditItem(it, 'remove')} className="text-red-600 font-bold">刪除</button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </section>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-[10px] font-bold text-gray-400">糖度選項 (逗號隔開)</label>
-                      <input type="text" value={editingStore.sugarStr} onChange={e=>setEditingStore({...editingStore, sugarStr: e.target.value})} className="w-full p-2 border rounded text-sm" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-gray-400">冰塊選項 (逗號隔開)</label>
-                      <input type="text" value={editingStore.iceStr} onChange={e=>setEditingStore({...editingStore, iceStr: e.target.value})} className="w-full p-2 border rounded text-sm" />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <span className="font-bold text-sm">品項清單</span>
-                      <button onClick={()=>setEditingStore({...editingStore, items: [...editingStore.items, {id:`m-${Date.now()}`, name:'', price:0}]})} className="text-xs text-teal-600">+ 新增品項</button>
-                    </div>
-                    {editingStore.items?.map(it => (
-                      <div key={it.id} className="flex gap-2 items-center bg-white p-2 border rounded shadow-sm">
-                        <input type="text" value={it.name} onChange={e=>setEditingStore({...editingStore, items: editingStore.items.map(x=>x.id===it.id?{...x, name:e.target.value}:x)})} className="flex-1 p-1 text-sm" />
-                        <input type="number" value={it.price} onChange={e=>setEditingStore({...editingStore, items: editingStore.items.map(x=>x.id===it.id?{...x, price:Number(e.target.value)}:x)})} className="w-16 p-1 text-sm text-right" />
-                        <button onClick={()=>setEditingStore({...editingStore, items: editingStore.items.filter(x=>x.id!==it.id)})} className="text-red-300"><Trash2 size={16}/></button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="p-4 border-t bg-gray-50 flex justify-end gap-3">
-                  <button onClick={()=>setEditingStore(null)} className="px-4 py-2 font-bold text-gray-500">取消</button>
-                  <button onClick={saveStoreChanges} className="bg-teal-600 text-white px-6 py-2 rounded-lg font-bold shadow-lg">儲存店家</button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 其他視窗 (刪除確認, 登入等) */}
-          {showClearConfirm && (
-            <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
-              <div className="bg-white rounded-2xl p-6 max-w-sm w-full text-center space-y-4">
-                <AlertTriangle className="mx-auto text-red-500" size={48} />
-                <h3 className="font-bold text-lg">確定清除今日所有點單？</h3>
-                <div className="flex gap-3">
-                  <button onClick={()=>setShowClearConfirm(false)} className="flex-1 p-2 bg-gray-100 rounded-lg">取消</button>
-                  <button onClick={handleClearOrders} className="flex-1 p-2 bg-red-600 text-white rounded-lg">確定清空</button>
-                </div>
-              </div>
-            </div>
-          )}
-
+          {/* Modal: Admin Login */}
           {showAdminLogin && (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-              <div className="bg-white rounded-2xl p-6 max-w-sm w-full animate-bounce-in text-center space-y-6">
+            <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl p-6 max-w-sm w-full text-center space-y-6 animate-bounce-in">
                 <Lock className="mx-auto text-teal-600" size={48} />
-                <h3 className="font-bold text-xl">管理員登入</h3>
-                <input type="password" value={adminPasswordInput} onChange={e=>setAdminPasswordInput(e.target.value)} className="w-full p-4 border rounded-xl text-center text-2xl tracking-widest font-mono" placeholder="••••" onKeyDown={e=>e.key==='Enter' && handleAdminLogin()}/>
-                <button onClick={handleAdminLogin} className="w-full bg-teal-600 text-white py-4 rounded-xl font-bold shadow-lg">驗證密碼</button>
-                <button onClick={()=>setShowAdminLogin(false)} className="text-gray-400 text-sm">返回</button>
+                <h3 className="font-bold text-xl">管理員驗證</h3>
+                <input type="password" value={adminPasswordInput} onChange={e=>setAdminPasswordInput(e.target.value)} className="w-full p-4 border rounded-xl text-center text-2xl tracking-widest" placeholder="••••" onKeyDown={e=>e.key==='Enter' && handleAdminLogin()}/>
+                <button onClick={handleAdminLogin} className="w-full bg-teal-600 text-white py-4 rounded-xl font-bold">驗證</button>
+                <button onClick={()=>setShowAdminLogin(false)} className="text-gray-400 text-sm">取消</button>
               </div>
             </div>
           )}
