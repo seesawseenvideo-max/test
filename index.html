@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>辦公室下午茶點單系統 - AI 2025 穩定版</title>
+  <title>下午茶點單系統 - AI 穩定修復版</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
@@ -32,12 +32,12 @@
     import { getFirestore, initializeFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query } from 'firebase/firestore';
 
     // ==========================================
-    // 1. 金鑰填寫區 (請在本地替換)
+    // 1. 金鑰填寫區 (請在此替換為截圖中的新金鑰)
     // ==========================================
     const API_KEYS = [
-      "AIzaSyC5cOL9suiO6LeTNi9_1jKAemT5DTnTnqE", 
-      "AIzaSyByPp9L7eulgRCSwv5XrPyiSkKsCPHEvd4", 
-      "AIzaSyBjRQBiQYoJGmhae2ONi-QskunwmQXjAi4"
+      "AIzaSyC5cOL9suiO6LeTNi9_1jKAemT5DTnTnqE", // 金鑰 1 (teatime1)
+      "AIzaSyByPp9L7eulgRCSwv5XrPyiSkKsCPHEvd4", // 金鑰 2 (teatime2)
+      "AIzaSyBjRQBiQYoJGmhae2ONi-QskunwmQXjAi4"  // 金鑰 3 (teatime3)
     ];
     let currentKeyIndex = 0;
 
@@ -50,7 +50,7 @@
     };
 
     // ==========================================
-    // 2. 修正後的 AI 呼叫邏輯
+    // 2. 修復後的 AI 呼叫邏輯 (使用 v1 穩定版)
     // ==========================================
     const callGeminiAI = async (prompt, imageParts = [], systemInstruction = "") => {
       const maxRetries = API_KEYS.length * 2;
@@ -60,7 +60,6 @@
         try {
           const payload = { 
             contents: [{ parts: [{ text: prompt }, ...imageParts] }],
-            // 2025 穩定版使用 system_instruction 欄位
             system_instruction: { 
               parts: [{ text: systemInstruction || "你是一個專業菜單助理，請分析內容並回傳純 JSON 格式。" }] 
             },
@@ -70,8 +69,8 @@
             }
           };
 
-          // 修正重點：使用 v1 穩定路徑與正確的模型名稱
-          const res = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${activeApiKey}`, {
+          // 核心修復：改用 v1 穩定版網址與正確模型名稱
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${activeApiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -80,10 +79,9 @@
           const data = await res.json();
           
           if (!res.ok) {
-            // 如果報錯，自動換下一組金鑰重試
-            console.error(`API 錯誤 (Index ${currentKeyIndex}):`, data.error?.message);
+            console.error(`Key ${currentKeyIndex} 失效，訊息:`, data.error?.message);
             currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
-            continue;
+            continue; // 自動換下一組金鑰
           }
 
           const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -97,7 +95,7 @@
       }
     };
 
-    // --- 主程式邏輯 ---
+    // --- 主程式其餘部分保持原本邏輯 ---
     function App() {
       const [liffLoading, setLiffLoading] = useState(true);
       const [lineProfile, setLineProfile] = useState(null);
@@ -135,22 +133,21 @@
       }, [db]);
 
       const handleAIParse = async () => {
-        if (!newStoreName) return showToast('請填寫內容', 'error');
+        if (!newStoreName) return showToast('請輸入菜單文字', 'error');
         setIsAnalyzing(true);
-        showToast('AI 正在分析...', 'info');
+        showToast('AI 正在讀取...', 'info');
         try {
-          const result = await callGeminiAI(`分析這段菜單並整理成品項價格：\n${newStoreName}`);
-          // 這裡可以加入 addDoc 存入資料庫的邏輯
-          console.log("AI 解析結果:", result);
-          showToast('解析成功！');
+          const result = await callGeminiAI(`分析這段文字並整理成飲品名稱與價格的 JSON 列表：\n${newStoreName}`);
+          console.log("解析結果:", result);
+          showToast('AI 解析成功！');
         } catch (e) { 
-          showToast('辨識失敗，請檢查金鑰限制設定', 'error'); 
+          showToast('解析出錯，請檢查 F12 Network', 'error'); 
         } finally { 
           setIsAnalyzing(false); 
         }
       };
 
-      if (liffLoading) return <div className="h-screen flex items-center justify-center font-bold text-teal-600">LINE 驗證中...</div>;
+      if (liffLoading) return <div className="h-screen flex items-center justify-center font-bold text-teal-600">驗證中...</div>;
 
       return (
         <div className="max-w-md mx-auto min-h-screen flex flex-col p-4 space-y-4">
@@ -174,15 +171,15 @@
             </div>
           ) : (
             <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-4">
-              <h2 className="font-bold text-xl text-gray-800 flex items-center gap-2"><Sparkles className="text-purple-500"/> AI 建立菜單</h2>
-              <textarea value={newStoreName} onChange={e=>setNewStoreName(e.target.value)} className="w-full p-4 border rounded-2xl bg-gray-50 h-32 outline-none focus:ring-2 focus:ring-purple-400" placeholder="貼上菜單文字內容..." />
-              <button onClick={handleAIParse} disabled={isAnalyzing} className="w-full bg-purple-600 text-white py-4 rounded-2xl font-bold flex justify-center items-center gap-2 shadow-lg shadow-purple-100 active:scale-95 transition-all">
+              <h2 className="font-bold text-xl text-gray-800 flex items-center gap-2"><Sparkles className="text-purple-500"/> AI 菜單解析</h2>
+              <textarea value={newStoreName} onChange={e=>setNewStoreName(e.target.value)} className="w-full p-4 border rounded-2xl bg-gray-50 h-40 outline-none focus:ring-2 focus:ring-purple-400" placeholder="貼上菜單文字內容..." />
+              <button onClick={handleAIParse} disabled={isAnalyzing} className="w-full bg-purple-600 text-white py-4 rounded-2xl font-bold flex justify-center items-center gap-2 shadow-lg active:scale-95 transition-all">
                 {isAnalyzing ? <Loader2 className="animate-spin" /> : <Sparkles />} 開始 AI 解析
               </button>
             </div>
           )}
           
-          {toast && <div className={`fixed bottom-10 left-1/2 -translate-x-1/2 text-white px-8 py-4 rounded-2xl shadow-2xl font-bold animate-bounce-in z-50 ${toast.type === 'error' ? 'bg-red-500' : 'bg-teal-600'}`}>{toast.message}</div>}
+          {toast && <div className={`fixed bottom-10 left-1/2 -translate-x-1/2 text-white px-8 py-4 rounded-2xl shadow-2xl font-bold z-50 ${toast.type === 'error' ? 'bg-red-500' : 'bg-teal-600'}`}>{toast.message}</div>}
         </div>
       );
     }
