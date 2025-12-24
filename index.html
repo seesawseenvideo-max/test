@@ -1,509 +1,419 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>辦公室下午茶點單系統 - LINE 版</title>
-  
-  <!-- 1. 載入 Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  
-  <!-- 2. 載入 Babel -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>辦公室下午茶點單系統</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
-  <!-- 3. 載入 LINE LIFF SDK -->
-  <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-
-  <!-- 4. 設定模組對應表 -->
-  <script type="importmap">
+    <script type="importmap">
     {
-      "imports": {
-        "react": "https://esm.sh/react@18.2.0",
-        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-        "lucide-react": "https://esm.sh/lucide-react@0.292.0",
-        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
-        "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
-        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
-      }
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom": "https://esm.sh/react-dom@18.2.0",
+            "lucide-react": "https://esm.sh/lucide-react@0.344.0",
+            "firebase/app": "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js",
+            "firebase/auth": "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js",
+            "firebase/firestore": "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js"
+        }
     }
-  </script>
+    </script>
 
-  <style>
-    body { background-color: #f9fafb; }
-    .scrollbar-hide::-webkit-scrollbar { display: none; }
-    .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
-    @keyframes fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-    .animate-fade-in { animation: fade-in 0.3s ease-out forwards; }
-    @keyframes bounce-in { 0% { transform: scale(0.9); opacity: 0; } 50% { transform: scale(1.05); } 100% { transform: scale(1); opacity: 1; } }
-    .animate-bounce-in { animation: bounce-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
-  </style>
+    <style>
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        .glass-morphism { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.3); }
+        body { background: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    </style>
 </head>
 <body>
+    <div id="root"></div>
 
-  <div id="root"></div>
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useMemo } from 'react';
+        import ReactDOM from 'react-dom';
+        import { 
+            Coffee, Plus, Trash2, Edit3, Settings, LogIn, X, 
+            CheckCircle, ChevronRight, BarChart2, FileDown, ShieldCheck, 
+            Image as ImageIcon, Loader2, Save, ShoppingBag
+        } from 'lucide-react';
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+        import { getFirestore, collection, doc, setDoc, getDoc, getDocs, addDoc, updateDoc, deleteDoc, query, onSnapshot, writeBatch } from 'firebase/firestore';
 
-  <script type="text/babel" data-type="module">
-    import React, { useState, useEffect, useMemo, useRef } from 'react';
-    import { createRoot } from 'react-dom/client';
-    import { 
-      Plus, Trash2, Coffee, Download, Users, List, Settings, 
-      ShoppingBag, X, ChefHat, Check, Upload, Image as ImageIcon, 
-      Loader2, Sparkles, Edit, Save, AlertTriangle, PenLine, Wifi, WifiOff, Lock, LogOut,
-      Minus, Info, ExternalLink, Search, Square, CheckSquare, Eye, EyeOff, RotateCcw,
-      ArrowRightLeft, FileSearch, CheckCircle2, AlertCircle
-    } from 'lucide-react';
-    
-    import { initializeApp } from 'firebase/app';
-    import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-    import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query, getDoc } from 'firebase/firestore';
-
-    // 取得環境變數與 Firebase 設定
-    const firebaseConfig = JSON.parse(__firebase_config);
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'office-tea-v1';
-    const apiKey = "AIzaSyAHD7DXOusd8wrcitV1idnW0lvOWLFfstc"; // 使用環境提供的 API Key
-
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getFirestore(app);
-
-    const LIFF_ID = "2008746387-2t2kxxUX";
-    const DEFAULT_SUGAR = ['正常糖', '少糖', '半糖', '微糖', '無糖', '無'];
-    const DEFAULT_ICE = ['正常冰', '少冰', '微冰', '去冰', '溫', '熱', '無'];
-
-    const Toast = ({ message, type, onClose }) => {
-      useEffect(() => {
-        const timer = setTimeout(onClose, 3000);
-        return () => clearTimeout(timer);
-      }, [onClose]);
-      const bgColors = { success: 'bg-green-600', error: 'bg-red-600', info: 'bg-blue-600' };
-      return (
-        <div className={`fixed bottom-4 right-4 ${bgColors[type] || 'bg-gray-800'} text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-2 animate-bounce-in z-50`}>
-          <span>{message}</span>
-        </div>
-      );
-    };
-
-    function App() {
-      const [liffLoading, setLiffLoading] = useState(true);
-      const [lineProfile, setLineProfile] = useState(null);
-      const [user, setUser] = useState(null);
-      const [view, setView] = useState('order'); 
-      const [stores, setStores] = useState([]); 
-      const [orders, setOrders] = useState([]); 
-      const [currentUser, setCurrentUser] = useState('訪客');
-      const [selectedStoreId, setSelectedStoreId] = useState(null);
-      const [cartItem, setCartItem] = useState(null); 
-      const [toast, setToast] = useState(null);
-      const [searchTerm, setSearchTerm] = useState('');
-      const [newStoreName, setNewStoreName] = useState('');
-      const [newStoreDescription, setNewStoreDescription] = useState('');
-      const [newStoreUrl, setNewStoreUrl] = useState('');
-      const [menuInputText, setMenuInputText] = useState('');
-      const [isAnalyzing, setIsAnalyzing] = useState(false);
-      const [editingStore, setEditingStore] = useState(null);
-      const [storeToDelete, setStoreToDelete] = useState(null);
-      const [showClearConfirm, setShowClearConfirm] = useState(false);
-      const [isAdmin, setIsAdmin] = useState(false);
-      const [showAdminLogin, setShowAdminLogin] = useState(false);
-      const [adminPasswordInput, setAdminPasswordInput] = useState('');
-      const [sugar, setSugar] = useState('正常糖');
-      const [ice, setIce] = useState('正常冰');
-      const [customNote, setCustomNote] = useState('');
-      const [count, setCount] = useState(1);
-      const [customItemName, setCustomItemName] = useState('');
-      const [customItemPrice, setCustomItemPrice] = useState('');
-      const [selectedToppings, setSelectedToppings] = useState([]);
-      const [editingOrderId, setEditingOrderId] = useState(null);
-
-      const [auditText, setAuditText] = useState('');
-      const [isAuditing, setIsAuditing] = useState(false);
-      const [auditResult, setAuditResult] = useState(null);
-
-      const showToast = (msg, type = 'success') => setToast({ message: msg, type });
-
-      // 初始化 LIFF
-      useEffect(() => {
-        const initLiff = async () => {
-          try {
-            await liff.init({ liffId: LIFF_ID });
-            if (liff.isLoggedIn()) {
-              const profile = await liff.getProfile();
-              setLineProfile(profile);
-              setCurrentUser(profile.displayName);
-            }
-          } catch (err) {
-            console.error('LIFF Init Error:', err);
-          } finally {
-            setLiffLoading(false);
-          }
+        // --- 設定區 ---
+        const LIFF_ID = "2008746387-2t2kxxUX";
+        const firebaseConfig = {
+            apiKey: "AIzaSyBJeC5O1DF2VpvoSE8OKjtPT4wYPYec-Ok",
+            authDomain: "office-tea-time.firebaseapp.com",
+            projectId: "office-tea-time",
+            storageBucket: "office-tea-time.firebasestorage.app",
+            messagingSenderId: "771203264362",
+            appId: "1:771203264362:web:cd47393dd73578b6ebbf13",
+            measurementId: "G-R5SV13TYTE"
         };
-        initLiff();
-      }, []);
+        const GOOGLE_AI_API_KEY = "AIzaSyAHD7DXOusd8wrcitV1idnW0lvOWLFfstc"; // TODO: 填入你的 Google AI API Key
 
-      // 初始化 Firebase 驗證 (符合 RULE 3)
-      useEffect(() => {
-        const initAuth = async () => {
-          try {
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-              await signInWithCustomToken(auth, __initial_auth_token);
-            } else {
-              await signInAnonymously(auth);
-            }
-          } catch (error) {
-            console.error("Auth Error:", error);
-          }
-        };
-        initAuth();
-        const unsubscribe = onAuthStateChanged(auth, setUser);
-        return () => unsubscribe();
-      }, []);
+        // 初始化 Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = 'office-tea-system';
 
-      // 監聽 Firestore 數據 (符合 RULE 1, 2)
-      useEffect(() => {
-        if (!user) return;
-        const storesQuery = query(collection(db, 'artifacts', appId, 'public', 'data', 'stores'));
-        const unsubStores = onSnapshot(storesQuery, (snapshot) => {
-          const loaded = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          loaded.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-          setStores(loaded);
-          if (loaded.length > 0) {
-            setSelectedStoreId(prev => loaded.find(s => s.id === prev) ? prev : loaded[0].id);
-          }
-        }, (err) => console.error("Stores Snapshot Error:", err));
+        // --- 子組件: 載入中動畫 ---
+        const LoadingSpinner = () => (
+            <div className="flex flex-col items-center justify-center p-12">
+                <Loader2 className="w-10 h-10 animate-spin text-blue-500 mb-2" />
+                <p className="text-gray-500">處理中，請稍候...</p>
+            </div>
+        );
 
-        const ordersQuery = query(collection(db, 'artifacts', appId, 'public', 'data', 'orders'));
-        const unsubOrders = onSnapshot(ordersQuery, (snapshot) => {
-          const loaded = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          loaded.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-          setOrders(loaded);
-        }, (err) => console.error("Orders Snapshot Error:", err));
+        // --- 主要應用程式 ---
+        function App() {
+            const [user, setUser] = useState(null);
+            const [lineProfile, setLineProfile] = useState(null);
+            const [stores, setStores] = useState([]);
+            const [orders, setOrders] = useState([]);
+            const [view, setView] = useState('home'); 
+            const [selectedStore, setSelectedStore] = useState(null);
+            const [isLoading, setIsLoading] = useState(false);
+            const [isAdmin, setIsAdmin] = useState(false);
+            const [showAuthModal, setShowAuthModal] = useState(false);
 
-        return () => { unsubStores(); unsubOrders(); };
-      }, [user]);
+            // [修正點] 初始化與身分驗證：移除導致錯誤的 Custom Token，改用穩定匿名登入
+            useEffect(() => {
+                const initApp = async () => {
+                    // 初始化 LIFF
+                    try {
+                        if (typeof liff !== 'undefined') {
+                            await liff.init({ liffId: LIFF_ID });
+                            if (liff.isLoggedIn()) {
+                                const profile = await liff.getProfile();
+                                setLineProfile(profile);
+                            }
+                        }
+                    } catch (err) { console.error("LIFF Init Error", err); }
 
-      // Gemini AI 呼叫功能
-      const callGeminiAI = async (prompt, imageParts = [], systemInstruction = "") => {
-        const maxRetries = 5;
-        const delays = [1000, 2000, 4000, 8000, 16000];
-        
-        for (let attempt = 0; attempt <= maxRetries; attempt++) {
-          try {
-            const payload = { 
-              contents: [{ parts: [{ text: prompt }, ...imageParts] }],
-              systemInstruction: { parts: [{ text: systemInstruction }] },
-              generationConfig: { responseMimeType: "application/json" }
+                    // Firebase 匿名登入 (排除 Token Mismatch 錯誤)
+                    try {
+                        await signInAnonymously(auth);
+                        console.log("Firebase 匿名驗證成功");
+                    } catch (authErr) {
+                        console.error("Firebase Auth Error", authErr);
+                    }
+                };
+                initApp();
+
+                const unsubscribe = onAuthStateChanged(auth, (u) => {
+                    setUser(u);
+                });
+                return () => unsubscribe();
+            }, []);
+
+            // 監聽 Firestore 數據
+            useEffect(() => {
+                if (!user) return;
+                
+                const storesRef = collection(db, 'artifacts', appId, 'public', 'data', 'stores');
+                const ordersRef = collection(db, 'artifacts', appId, 'public', 'data', 'orders');
+
+                const unsubStores = onSnapshot(storesRef, (snapshot) => {
+                    setStores(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                }, (err) => console.error("Stores fetch error", err));
+
+                const unsubOrders = onSnapshot(ordersRef, (snapshot) => {
+                    setOrders(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                }, (err) => console.error("Orders fetch error", err));
+
+                return () => { unsubStores(); unsubOrders(); };
+            }, [user]);
+
+            const loginWithLine = () => {
+                if (!liff.isLoggedIn()) {
+                    liff.login();
+                }
             };
-            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-            if (data.error) throw new Error(data.error.message);
-            const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-            return JSON.parse(text);
-          } catch (e) { 
-            if (attempt === maxRetries) throw e;
-            await new Promise(r => setTimeout(r, delays[attempt]));
-          }
-        }
-      };
 
-      // 智慧菜單比對查核
-      const handleMenuAudit = async () => {
-        if (!auditText.trim()) return showToast('請貼上網頁文字內容', 'error');
-        setIsAuditing(true);
-        showToast('正在與現有菜單進行比對...', 'info');
-        try {
-          const currentItems = editingStore.items.map(i => ({ name: i.name, price: i.price }));
-          const systemPrompt = `你是一個專業的店鋪菜單查核員。
-          任務：比對【系統現有菜單】與【網頁最新內容】，找出差異。
-          
-          查核核心邏輯（模糊匹配規則）：
-          1. 品項名稱識別：只要「核心名稱」相同即視為同一品項。忽略後綴標註如 (M), (L), 杯, 瓶。忽略價格括號如 ($45)。
-          2. 回傳格式為純 JSON: { added: [{name, price}], removed: [{name}] }`;
+            // AI 解析功能 (優化模型名稱)
+            const parseMenuWithAI = async (text, images = []) => {
+                if (!GOOGLE_AI_API_KEY) return alert("請先在程式碼中填入 Google AI API Key");
+                setIsLoading(true);
+                try {
+                    const systemPrompt = `你是一個專業的菜單解析助理。請解析提供的文字或圖片中的飲料菜單。請以繁體中文回答。回傳格式必須為純 JSON。`;
 
-          const userQuery = `系統現有菜單：${JSON.stringify(currentItems)}\n網頁文字：\n${auditText}`;
-          const result = await callGeminiAI(userQuery, [], systemPrompt);
-          setAuditResult(result);
-          showToast('查核完成');
-        } catch (e) {
-          showToast('比對失敗', 'error');
-        } finally {
-          setIsAuditing(false);
-        }
-      };
+                    let content = [{ text: text || "請解析圖片內容" }];
+                    if (images.length > 0) {
+                        for (const base64 of images) {
+                            content.push({ inlineData: { mimeType: "image/png", data: base64.split(',')[1] } });
+                        }
+                    }
 
-      const parsePrice = (v) => {
-        if (typeof v === 'number') return v;
-        const matches = String(v).match(/[0-9.]+/);
-        return matches ? parseFloat(matches[0]) : 0;
-      };
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GOOGLE_AI_API_KEY}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: content }],
+                            systemInstruction: { parts: [{ text: systemPrompt }] },
+                            generationConfig: { responseMimeType: "application/json" }
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    const data = JSON.parse(result.candidates[0].content.parts[0].text);
+                    
+                    const storeRef = collection(db, 'artifacts', appId, 'public', 'data', 'stores');
+                    await addDoc(storeRef, {
+                        ...data,
+                        createdAt: Date.now(),
+                        settings: { showSugar: true, showIce: true, showNote: true }
+                    });
 
-      // AI 解析並建立店家
-      const handleAIParse = async (mode, files = null) => {
-        if (!newStoreName.trim()) return showToast('請輸入店家名稱', 'error');
-        setIsAnalyzing(true);
-        showToast('AI 分析中...', 'info');
-        try {
-          let imageParts = [];
-          if (mode === 'image' && files) {
-            imageParts = await Promise.all(Array.from(files).map(f => new Promise((res) => {
-              const r = new FileReader();
-              r.onload = () => res({ inlineData: { mimeType: f.type, data: r.result.split(',')[1] } });
-              r.readAsDataURL(f);
-            })));
-          }
-          const queryText = mode === 'image' ? "分析菜單圖片中的品項與對應價格" : `分析內容：\n${menuInputText}`;
-          const systemPrompt = `你是一個專業助理。回傳 JSON 包含 items, toppings, sugarOptions, iceOptions。品項名稱保留原始繁體中文。`;
-          
-          const result = await callGeminiAI(queryText, imageParts, systemPrompt);
-          const tempStore = {
-            name: newStoreName, description: newStoreDescription, url: newStoreUrl,
-            items: (result.items || []).map((it, i) => ({ id: `ai-${Date.now()}-${i}`, name: it.name || "未命名", price: parsePrice(it.price), noSugar: false, noIce: false, allowNote: true })),
-            toppings: (result.toppings || []).map((t, i) => ({ id: `ai-t-${Date.now()}-${i}`, name: t.name || "加料", price: parsePrice(t.price)})),
-            sugarOptions: result.sugarOptions?.length ? result.sugarOptions : DEFAULT_SUGAR,
-            iceOptions: result.iceOptions?.length ? result.iceOptions : DEFAULT_ICE,
-            createdAt: Date.now()
-          };
-          const editState = JSON.parse(JSON.stringify(tempStore));
-          editState.id = 'temp-new';
-          editState.sugarStr = editState.sugarOptions.join(',');
-          editState.iceStr = editState.iceOptions.join(',');
-          setEditingStore(editState);
-          setNewStoreName(''); setNewStoreDescription(''); setNewStoreUrl(''); setMenuInputText('');
-        } catch (e) { showToast(`解析失敗`, 'error'); } finally { setIsAnalyzing(false); }
-      };
+                } catch (err) {
+                    console.error("AI Parsing Error", err);
+                    alert("解析失敗，請確認 API Key 或內容格式。");
+                } finally {
+                    setIsLoading(false);
+                }
+            };
 
-      const saveStoreChanges = async () => {
-        if (!user) return showToast('尚未連線', 'error');
-        try {
-          const sOpt = (editingStore.sugarStr || '').split(/[,\s，、]+/).map(s => s.trim()).filter(Boolean);
-          const iOpt = (editingStore.iceStr || '').split(/[,\s，、]+/).map(s => s.trim()).filter(Boolean);
-          const storeData = {
-            name: editingStore.name, description: editingStore.description || '', url: editingStore.url || '',
-            items: editingStore.items || [], toppings: editingStore.toppings || [],
-            sugarOptions: sOpt.length ? sOpt : DEFAULT_SUGAR, iceOptions: iOpt.length ? iOpt : DEFAULT_ICE, updatedAt: Date.now()
-          };
-          if (editingStore.id === 'temp-new') {
-            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'stores'), { ...storeData, createdAt: Date.now() });
-          } else {
-            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'stores', editingStore.id), storeData);
-          }
-          setEditingStore(null); showToast('儲存成功');
-        } catch (e) { showToast('儲存失敗', 'error'); }
-      };
+            const handleClearAllOrders = async () => {
+                if (!window.confirm("確定要清除所有訂單嗎？")) return;
+                const batch = writeBatch(db);
+                orders.forEach(order => {
+                    const ref = doc(db, 'artifacts', appId, 'public', 'data', 'orders', order.id);
+                    batch.delete(ref);
+                });
+                await batch.commit();
+            };
 
-      const updateEditingItem = (id, f, v) => setEditingStore(p => ({ ...p, items: p.items.map(i => i.id === id ? { ...i, [f]: f === 'price' ? Number(v) : v } : i) }));
-      const batchToggleItems = (field, value) => setEditingStore(p => ({ ...p, items: p.items.map(i => ({ ...i, [field]: value })) }));
-      const addEmptyItemToEditing = () => setEditingStore(p => ({ ...p, items: [...(p.items || []), { id: `m-${Date.now()}`, name: '', price: 0, noSugar: false, noIce: false, allowNote: true }] }));
-      const removeItemFromEditing = (id) => setEditingStore(p => ({ ...p, items: p.items.filter(i => i.id !== id) }));
-      
-      const openEditStore = (store) => {
-        const editState = JSON.parse(JSON.stringify(store));
-        editState.sugarStr = (editState.sugarOptions || DEFAULT_SUGAR).join(',');
-        editState.iceStr = (editState.iceOptions || DEFAULT_ICE).join(',');
-        setEditingStore(editState);
-        setAuditResult(null);
-        setAuditText('');
-      };
+            const exportCSV = () => {
+                const headers = ["店家", "訂購人", "品項", "價格", "糖度", "冰塊", "備註"];
+                const rows = orders.map(o => [
+                    o.storeName, o.userName, o.itemName, o.price, o.sugar, o.ice, o.note
+                ]);
+                let csvContent = "data:text/csv;charset=utf-8,\uFEFF" 
+                    + headers.join(",") + "\n" 
+                    + rows.map(e => e.join(",")).join("\n");
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", `訂單匯總_${new Date().toLocaleDateString()}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
 
-      const handleAddToCart = async () => {
-        if (!currentUser) return showToast('未取得身份', 'error');
-        let name = cartItem.isCustom ? customItemName : cartItem.name;
-        let price = Number(cartItem.isCustom ? customItemPrice : cartItem.price);
-        try {
-          const finalNote = [(!cartItem.noSugar ? sugar : ''), (!cartItem.noIce ? ice : ''), customNote].filter(Boolean).join(' ');
-          
-          if (editingOrderId) {
-            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'orders', editingOrderId), { item: { name }, note: finalNote, price: price });
-            setEditingOrderId(null);
-          } else {
-            const batch = [];
-            for (let i = 0; i < count; i++) {
-              batch.push(addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'orders'), {
-                userName: currentUser, storeId: selectedStoreId, storeName: stores.find(s => s.id === selectedStoreId)?.name,
-                item: { name }, note: finalNote, price: price, timestamp: new Date().toISOString()
-              }));
-            }
-            await Promise.all(batch);
-          }
-          setCartItem(null); showToast('已送出');
-        } catch (e) { showToast("失敗", "error"); }
-      };
-
-      const stats = useMemo(() => {
-        let total = 0;
-        orders.forEach(o => total += (o.price || 0));
-        return { totalAmount: total };
-      }, [orders]);
-
-      const handleAdminLogin = () => {
-        if (adminPasswordInput === '8888') {
-          setIsAdmin(true); setShowAdminLogin(false); setView('admin'); showToast('登入成功');
-        } else showToast('密碼錯誤', 'error');
-      };
-
-      if (liffLoading) return (
-        <div className="min-h-screen flex flex-col items-center justify-center bg-teal-50 p-6 text-center">
-          <Loader2 className="animate-spin text-teal-600 mb-4" size={48} />
-          <p className="text-teal-800 font-bold">載入系統中...</p>
-        </div>
-      );
-
-      const currentStore = stores.find(s => s.id === selectedStoreId);
-      const estimatedPrice = cartItem ? ((Number(cartItem.isCustom ? customItemPrice : (cartItem.price || 0))) * count) : 0;
-
-      return (
-        <div className="min-h-screen bg-gray-50 text-gray-800 pb-20 md:pb-0 font-sans leading-relaxed">
-          <header className="text-white p-4 shadow-md sticky top-0 z-10 bg-teal-600">
-            <div className="max-w-4xl mx-auto flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                {lineProfile?.pictureUrl ? <img src={lineProfile.pictureUrl} className="w-10 h-10 rounded-full border-2 border-white/50" /> : <Coffee size={24}/>}
-                <h1 className="text-lg font-bold">{lineProfile?.displayName || '訪客'}</h1>
-              </div>
-              <div className="text-sm bg-white/20 px-3 py-1 rounded-full">今日總額: ${stats.totalAmount}</div>
-            </div>
-          </header>
-
-          <main className="max-w-4xl mx-auto p-4">
-            <div className="flex gap-2 mb-6 bg-white p-1 rounded-lg shadow-sm border border-gray-200">
-              {['order', 'stats', 'admin'].map(v => (
-                <button key={v} onClick={() => (v==='admin' && !isAdmin) ? setShowAdminLogin(true) : setView(v)} className={`flex-1 py-2 px-4 rounded-md flex items-center justify-center gap-2 transition-colors ${view===v ? 'bg-teal-100 text-teal-700 font-bold' : 'text-gray-500 hover:bg-gray-50'}`}>
-                  {v==='order' && <ShoppingBag size={18}/>}
-                  {v==='stats' && <List size={18}/>}
-                  {v==='admin' && <Settings size={18}/>}
-                  <span className="hidden sm:inline">{v === 'order' ? '點餐' : v === 'stats' ? '統計' : '管理'}</span>
-                </button>
-              ))}
-            </div>
-
-            {view === 'order' && (
-              <div className="space-y-6 animate-fade-in">
-                {stores.length > 0 ? (
-                  <>
-                    <div className="flex overflow-x-auto gap-2 mb-4 pb-2 scrollbar-hide">
-                      {stores.map(s => <button key={s.id} onClick={() => setSelectedStoreId(s.id)} className={`whitespace-nowrap px-4 py-2 rounded-full border transition-all ${selectedStoreId === s.id ? 'bg-teal-600 text-white border-teal-600 shadow-md' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>{s.name}</button>)}
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                      <button onClick={()=>setCartItem({id:'custom', isCustom:true})} className="flex flex-col items-center justify-center p-4 bg-teal-50 border-2 border-dashed border-teal-300 rounded-xl text-teal-700 gap-2 min-h-[100px] hover:bg-teal-100 transition-colors shadow-sm"><PenLine size={24}/>自訂</button>
-                      {(currentStore?.items || []).filter(i=>(i.name || '').toLowerCase().includes(searchTerm.toLowerCase())).map(item => (
-                        <button key={item.id} onClick={()=>setCartItem(item)} className="p-4 bg-white border rounded-xl hover:shadow-md hover:border-teal-300 text-left transition-all">
-                          <span className="font-bold text-gray-800 line-clamp-2">{item.name}</span>
-                          <span className="text-gray-500 text-sm mt-1 inline-block">${item.price}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                ) : <div className="text-center py-10 text-gray-400">尚未新增店家，請切換至管理頁面。</div>}
-              </div>
-            )}
-          </main>
-
-          {/* 管理員登入 Modal - 修正了這裡的語法錯誤 */}
-          {showAdminLogin && (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-              <div className="bg-white rounded-2xl p-6 shadow-2xl max-w-sm w-full animate-bounce-in">
-                <h3 className="font-bold text-xl text-center mb-4">管理員登入</h3>
-                <input 
-                  type="password" 
-                  value={adminPasswordInput} 
-                  onChange={(e) => setAdminPasswordInput(e.target.value)} 
-                  className="w-full p-4 border rounded-xl mb-4 text-center tracking-[1em] text-2xl" 
-                  placeholder="••••" 
-                  onKeyDown={e=>e.key==='Enter' && handleAdminLogin()}
-                />
-                <button onClick={handleAdminLogin} className="w-full bg-teal-600 text-white py-4 rounded-xl font-bold">驗證登入</button>
-                <button onClick={()=>setShowAdminLogin(false)} className="w-full text-gray-400 mt-4 text-sm font-medium">返回</button>
-              </div>
-            </div>
-          )}
-
-          {/* 購物車 Modal */}
-          {cartItem && (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 z-50">
-              <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-2xl shadow-2xl overflow-hidden animate-fade-in">
-                <div className="p-4 bg-teal-50 border-b flex justify-between items-center">
-                  <h3 className="font-bold text-teal-800">{cartItem.isCustom ? '自訂點單' : cartItem.name}</h3>
-                  <button onClick={()=>setCartItem(null)} className="p-1"><X size={24}/></button>
-                </div>
-                <div className="p-6 space-y-5">
-                  <div className="flex items-center justify-between bg-gray-50 p-3 rounded-xl">
-                    <span className="text-sm font-bold text-gray-600">數量</span>
-                    <div className="flex items-center gap-4">
-                      <button onClick={()=>setCount(Math.max(1, count-1))} className="w-8 h-8 flex items-center justify-center bg-white rounded-full shadow-sm"><Minus size={16}/></button>
-                      <span className="font-bold text-lg">{count}</span>
-                      <button onClick={()=>setCount(count+1)} className="w-8 h-8 flex items-center justify-center bg-white rounded-full shadow-sm"><Plus size={16}/></button>
-                    </div>
-                  </div>
-                  {cartItem.allowNote !== false && (
-                    <input type="text" value={customNote} onChange={e=>setCustomNote(e.target.value)} placeholder="備註 (如：去冰、加珍珠...)" className="w-full p-3 border rounded-xl text-sm" />
-                  )}
-                  <button onClick={handleAddToCart} className="w-full bg-teal-600 text-white py-4 rounded-2xl font-bold mt-4 shadow-lg shadow-teal-100">
-                    確定加入訂單 $${estimatedPrice}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 店家編輯 Modal */}
-          {editingStore && (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-              <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-                <div className="p-4 bg-gray-100 border-b flex justify-between items-center font-bold">
-                  <h3>編輯店家與菜單</h3>
-                  <button onClick={()=>setEditingStore(null)}><X size={24}/></button>
-                </div>
-                <div className="p-6 overflow-y-auto flex-1 space-y-6">
-                  <section className="bg-purple-50 p-4 rounded-xl border border-purple-100 space-y-3">
-                    <h4 className="font-bold text-purple-700 flex items-center gap-2 text-sm uppercase"><FileSearch size={18}/> 智慧菜單查核驗證</h4>
-                    <div className="flex gap-2">
-                      <textarea 
-                        value={auditText} 
-                        onChange={e=>setAuditText(e.target.value)} 
-                        placeholder="在此貼上網頁點單文字，AI 將自動比對核心品項..." 
-                        className="flex-1 p-2 border rounded text-xs min-h-[80px]"
-                      />
-                      <button onClick={handleMenuAudit} disabled={isAuditing} className="bg-purple-600 text-white px-4 rounded-lg font-bold text-sm">
-                        {isAuditing ? <Loader2 className="animate-spin" size={16}/> : '名稱查核'}
-                      </button>
-                    </div>
-                  </section>
-                  <section className="space-y-4">
-                    <input type="text" value={editingStore.name} onChange={e=>setEditingStore({...editingStore, name: e.target.value})} className="w-full p-2 border rounded font-bold" placeholder="店家名" />
-                    <div className="flex flex-col sm:flex-row gap-3 bg-gray-50 p-3 rounded-lg border">
-                      <div className="font-bold text-teal-700 text-sm">快速設定：</div>
-                      <div className="flex gap-2">
-                        <button onClick={()=>batchToggleItems('allowNote', true)} className="text-xs bg-teal-50 text-teal-600 px-2 py-1 rounded">備註全開</button>
-                        <button onClick={()=>batchToggleItems('allowNote', false)} className="text-xs bg-gray-100 text-gray-400 px-2 py-1 rounded">備註全關</button>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      {(editingStore.items || []).map(item => (
-                        <div key={item.id} className="flex gap-2 items-center bg-white p-2 rounded-lg border shadow-sm">
-                          <input type="text" value={item.name} onChange={e=>updateEditingItem(item.id, 'name', e.target.value)} className="flex-1 p-1 border rounded text-sm" placeholder="品項" />
-                          <input type="number" value={item.price} onChange={e=>updateEditingItem(item.id, 'price', e.target.value)} className="w-16 p-1 border rounded text-xs text-right" />
-                          <button onClick={()=>updateEditingItem(item.id, 'allowNote', !item.allowNote)} className={`w-7 h-7 flex items-center justify-center rounded text-[10px] font-bold border ${item.allowNote !== false ? 'bg-teal-50 text-teal-600' : 'bg-gray-50 text-gray-300'}`}>註</button>
-                          <button onClick={()=>removeItemFromEditing(item.id)}><Trash2 size={16} className="text-gray-300 hover:text-red-500"/></button>
+            // --- 視圖組件 ---
+            const HomeView = () => (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="flex justify-between items-center">
+                        <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+                            <Coffee className="text-orange-500" /> 店家清單
+                        </h2>
+                        <div className="flex gap-2">
+                            {lineProfile && (
+                                <button onClick={() => setView('admin')} className="p-2 bg-gray-200 rounded-full hover:bg-gray-300 transition-colors">
+                                    <Settings className="w-5 h-5 text-gray-600" />
+                                </button>
+                            )}
+                            {!lineProfile ? (
+                                <button onClick={loginWithLine} className="flex items-center gap-2 px-4 py-2 bg-[#06C755] text-white rounded-full font-medium shadow-md hover:opacity-90 transition-opacity">
+                                    <LogIn size={18} /> LINE 登入
+                                </button>
+                            ) : (
+                                <div className="flex items-center gap-2 bg-white p-1 pr-4 rounded-full shadow-sm border">
+                                    <img src={lineProfile.pictureUrl} className="w-8 h-8 rounded-full" />
+                                    <span className="text-sm font-medium">{lineProfile.displayName}</span>
+                                </div>
+                            )}
                         </div>
-                      ))}
-                      <button onClick={addEmptyItemToEditing} className="w-full py-2 border-2 border-dashed rounded-lg text-gray-400 text-sm hover:bg-gray-50">+ 新增手動品項</button>
                     </div>
-                  </section>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {stores.length === 0 ? (
+                            <div className="col-span-full p-12 text-center bg-white rounded-3xl border-2 border-dashed border-gray-200">
+                                <p className="text-gray-400">目前還沒有店家，請登入管理員新增</p>
+                            </div>
+                        ) : (
+                            stores.map(store => (
+                                <div key={store.id} onClick={() => { setSelectedStore(store); setView('store-detail'); }} className="glass-morphism p-5 rounded-3xl cursor-pointer hover:shadow-xl transition-all border-b-4 border-orange-100 group">
+                                    <div className="flex justify-between items-start mb-4">
+                                        <div className="p-3 bg-orange-100 rounded-2xl text-orange-600 group-hover:scale-110 transition-transform">
+                                            <ShoppingBag size={24} />
+                                        </div>
+                                        <span className="text-xs bg-orange-50 text-orange-600 px-2 py-1 rounded-full">
+                                            {orders.filter(o => o.storeId === store.id).length} 筆點單
+                                        </span>
+                                    </div>
+                                    <h3 className="text-xl font-bold text-gray-800 mb-1">{store.storeName}</h3>
+                                    <p className="text-sm text-gray-500 flex items-center gap-1">查看菜單並點餐 <ChevronRight size={14} /></p>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                    <div className="fixed bottom-6 right-6">
+                        <button onClick={() => setView('stats')} className="p-4 bg-white text-blue-600 rounded-full shadow-2xl hover:scale-110 transition-transform border border-blue-100">
+                            <BarChart2 size={24} />
+                        </button>
+                    </div>
                 </div>
-                <div className="p-4 border-t bg-gray-100 flex justify-end gap-3">
-                  <button onClick={()=>setEditingStore(null)} className="px-4 py-2 text-gray-500">取消</button>
-                  <button onClick={saveStoreChanges} className="bg-teal-600 text-white px-8 py-2 rounded-lg font-bold">儲存店家資料</button>
+            );
+
+            // ... (其餘 StoreDetailView, AdminView, StatsView 邏輯保持不變) ...
+            const StoreDetailView = () => {
+                const [activeOrder, setActiveOrder] = useState(null);
+                const [orderForm, setOrderForm] = useState({ sugar: '', ice: '', note: '' });
+                const storeOrders = useMemo(() => orders.filter(o => o.storeId === selectedStore?.id), [orders, selectedStore]);
+
+                const handlePlaceOrder = (item) => {
+                    if (!lineProfile) return setShowAuthModal(true);
+                    setActiveOrder(item);
+                    setOrderForm({ sugar: selectedStore.options.sugar[0], ice: selectedStore.options.ice[0], note: '' });
+                };
+
+                const submitOrder = async () => {
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'orders'), {
+                        storeId: selectedStore.id,
+                        storeName: selectedStore.storeName,
+                        itemName: activeOrder.name,
+                        price: activeOrder.price,
+                        ...orderForm,
+                        lineUid: lineProfile.userId,
+                        userName: lineProfile.displayName,
+                        userPic: lineProfile.pictureUrl,
+                        createdAt: Date.now()
+                    });
+                    setActiveOrder(null);
+                };
+
+                return (
+                    <div className="space-y-6 animate-fade-in max-w-2xl mx-auto pb-24">
+                        <button onClick={() => setView('home')} className="flex items-center gap-1 text-gray-500 hover:text-gray-800 transition-colors">
+                            <ChevronRight className="rotate-180" size={18} /> 返回
+                        </button>
+                        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+                            <h2 className="text-2xl font-bold mb-4">{selectedStore?.storeName}</h2>
+                            <div className="grid grid-cols-1 gap-3">
+                                {selectedStore?.items.map((item, idx) => (
+                                    <div key={idx} className="flex justify-between items-center p-4 bg-gray-50 rounded-2xl">
+                                        <div>
+                                            <span className="font-medium">{item.name}</span>
+                                            <p className="text-sm text-gray-500">${item.price}</p>
+                                        </div>
+                                        <button onClick={() => handlePlaceOrder(item)} className="bg-white p-2 rounded-xl shadow-sm hover:bg-orange-500 hover:text-white transition-all"><Plus /></button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        {activeOrder && (
+                            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                                <div className="bg-white w-full max-w-md rounded-3xl p-6">
+                                    <h3 className="text-xl font-bold mb-4">訂購：{activeOrder.name}</h3>
+                                    <div className="space-y-4">
+                                        <input type="text" placeholder="備註" value={orderForm.note} onChange={e=>setOrderForm({...orderForm, note: e.target.value})} className="w-full p-3 bg-gray-50 rounded-xl" />
+                                        <button onClick={submitOrder} className="w-full py-4 bg-orange-500 text-white rounded-2xl font-bold">送出</button>
+                                        <button onClick={()=>setActiveOrder(null)} className="w-full py-2 text-gray-400">取消</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
+
+            const AdminView = () => {
+                const [pwd, setPwd] = useState('');
+                const [isAuthed, setIsAuthed] = useState(isAdmin);
+                const [menuInput, setMenuInput] = useState('');
+
+                if (!isAuthed) {
+                    return (
+                        <div className="flex flex-col items-center p-12 bg-white rounded-3xl border">
+                            <ShieldCheck className="w-16 h-16 text-blue-500 mb-4" />
+                            <input type="password" value={pwd} onChange={e=>setPwd(e.target.value)} placeholder="密碼 (預設 8888)" className="p-3 border rounded-xl mb-4 text-center" />
+                            <button onClick={() => pwd === '8888' ? (setIsAuthed(true), setIsAdmin(true)) : alert('錯誤')} className="px-8 py-3 bg-blue-600 text-white rounded-full">驗證</button>
+                        </div>
+                    );
+                }
+                return (
+                    <div className="space-y-8 max-w-3xl mx-auto">
+                        <div className="flex justify-between items-center">
+                            <h2 className="text-2xl font-bold">管理後台</h2>
+                            <button onClick={()=>setView('home')}><X/></button>
+                        </div>
+                        <div className="bg-white p-6 rounded-3xl border">
+                            <textarea value={menuInput} onChange={e=>setMenuInput(e.target.value)} placeholder="貼上菜單文字..." className="w-full p-4 bg-gray-50 rounded-2xl min-h-[120px] mb-4" />
+                            <button onClick={()=>parseMenuWithAI(menuInput)} disabled={isLoading} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold disabled:opacity-50">
+                                {isLoading ? 'AI 解析中...' : 'AI 建立店家'}
+                            </button>
+                        </div>
+                        <div className="bg-red-50 p-6 rounded-3xl border border-red-100">
+                            <button onClick={handleClearAllOrders} className="px-6 py-3 bg-red-500 text-white rounded-2xl font-bold">一鍵清除所有訂單</button>
+                        </div>
+                    </div>
+                );
+            };
+
+            const StatsView = () => (
+                <div className="space-y-6 max-w-3xl mx-auto">
+                    <div className="flex justify-between items-center">
+                        <h2 className="text-2xl font-bold">統計匯總</h2>
+                        <button onClick={()=>setView('home')}><X/></button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-orange-500 text-white p-6 rounded-3xl">
+                            <p className="text-sm opacity-80">總金額</p>
+                            <h3 className="text-3xl font-bold">${orders.reduce((s,o)=>s+(o.price||0), 0)}</h3>
+                        </div>
+                        <div className="bg-blue-500 text-white p-6 rounded-3xl">
+                            <p className="text-sm opacity-80">總杯數</p>
+                            <h3 className="text-3xl font-bold">{orders.length}</h3>
+                        </div>
+                    </div>
+                    <button onClick={exportCSV} className="w-full py-3 bg-gray-800 text-white rounded-xl flex items-center justify-center gap-2">
+                        <FileDown size={18}/> 匯出 CSV 檔案
+                    </button>
                 </div>
-              </div>
-            </div>
-          )}
+            );
 
-          {toast && <Toast message={toast.message} type={toast.type} onClose={()=>setToast(null)} />}
-        </div>
-      );
-    }
+            return (
+                <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto">
+                    <header className="flex items-center justify-between mb-8">
+                        <h1 className="text-3xl font-black text-gray-800 tracking-tight flex items-center gap-3">
+                            <div className="bg-orange-500 text-white p-2 rounded-2xl rotate-3 shadow-lg"><Coffee /></div>
+                            下午茶大隊
+                        </h1>
+                    </header>
+                    {isLoading && <LoadingSpinner />}
+                    {!isLoading && (
+                        <>
+                            {view === 'home' && <HomeView />}
+                            {view === 'store-detail' && <StoreDetailView />}
+                            {view === 'admin' && <AdminView />}
+                            {view === 'stats' && <StatsView />}
+                        </>
+                    )}
+                    {showAuthModal && (
+                        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
+                            <div className="bg-white p-8 rounded-[40px] shadow-2xl max-w-sm w-full text-center relative">
+                                <button onClick={() => setShowAuthModal(false)} className="absolute top-6 right-6 text-gray-400"><X /></button>
+                                <h3 className="text-2xl font-bold mb-2">需要登入</h3>
+                                <p className="text-gray-500 mb-8">請先使用 LINE 登入系統才能進行點單。</p>
+                                <button onClick={() => { loginWithLine(); setShowAuthModal(false); }} className="w-full py-4 bg-[#06C755] text-white rounded-3xl font-bold">使用 LINE 登入</button>
+                            </div>
+                        </div>
+                    )}
+                    <footer className="mt-20 py-8 text-center text-gray-400 text-xs">
+                        &copy; 2025 Office Tea Ordering System.
+                    </footer>
+                </div>
+            );
+        }
 
-    createRoot(document.getElementById('root')).render(<App />);
-  </script>
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
 </body>
 </html>
